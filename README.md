@@ -24,8 +24,12 @@ El mapa se autoguarda en el navegador (`localStorage`). Para guardarlo de verdad
 | Shift + arrastrar | borrar bloques |
 | Ctrl + arrastrar | rellenar rectángulo |
 | 1–9, 0 | herramientas |
-| Flechas / Supr | mover / borrar la pieza seleccionada |
-| L | encender/apagar la bombilla seleccionada |
+| Seleccionar (1): click o arrastrar | marca piezas **y bloques**; Shift añade |
+| Arrastrar lo marcado | lo mueve (bloques y piezas juntos) |
+| Ctrl+C / Ctrl+X / Ctrl+V | copiar / cortar / pegar. Al pegar sale un sello: click para colocar (se puede repetir), Esc para salir |
+| Ctrl+A | seleccionar todo |
+| Flechas / Supr | mover / borrar lo marcado |
+| L | encender/apagar las bombillas marcadas |
 | F / G | encuadrar / rejilla |
 | Ctrl+Z / Ctrl+Y | deshacer / rehacer |
 

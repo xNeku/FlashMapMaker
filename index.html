@@ -240,7 +240,10 @@ function validate(m) { return []; } // hueco para cuando se active
 
 let dpr = 1;
 let M = newModel();
-let tool = 'select', sel = null, drag = null, hover = null, spaceDown = false;
+let tool = 'select', drag = null, hover = null, spaceDown = false;
+let selIds = new Set(), selCells = new Set(); // selección: piezas (por id) y bloques (por clave de celda)
+let clip = null, pasting = false;             // portapapeles y modo "sello"
+const CLIP_KEY = 'flashmapmaker.clip.v1';
 const opts = { grid: true, lights: false, char: false };
 const view = { ox: 20, oy: 20, s: 12 };
 
@@ -259,6 +262,9 @@ const TOOLS = [
 
 const getEnt = id => M.ents.find(e => e.id === id);
 const isEmpty = () => M.cells.size === 0 && M.ents.length === 0;
+const clearSel = () => { selIds = new Set(); selCells = new Set(); };
+const hasSel = () => selIds.size > 0 || selCells.size > 0;
+const single = () => (selIds.size === 1 && selCells.size === 0) ? getEnt([...selIds][0]) : null; // una sola pieza → inspector
 
 // ---- historial + autoguardado
 const hist = { stack: [], i: -1 };
@@ -278,14 +284,14 @@ function commit() {
 function restore(i) {
   hist.i = i;
   M = jsonToModel(JSON.parse(hist.stack[i])).model;
-  sel = null;
+  clearSel(); pasting = false;
   autosave(); syncHeader(); refreshUI();
 }
 function undo() { if (hist.i > 0) restore(hist.i - 1); }
 function redo() { if (hist.i < hist.stack.length - 1) restore(hist.i + 1); }
 
 function replaceModel(model, fit) {
-  M = model; sel = null;
+  M = model; clearSel(); pasting = false;
   syncHeader();
   if (fit) fitView();
   commit();
@@ -347,6 +353,17 @@ function drawEnt(en, a) {
   ctx.globalAlpha = 1;
 }
 
+function drawCell(t, px, py) {
+  const s = view.s;
+  if (t === 'solid') {
+    ctx.fillStyle = '#667085'; ctx.fillRect(px, py, s, s);
+    if (s >= 8) { ctx.strokeStyle = 'rgba(0,0,0,.28)'; ctx.lineWidth = 1; ctx.strokeRect(px + .5, py + .5, s - 1, s - 1); }
+  } else {
+    ctx.fillStyle = 'rgba(212,155,58,.14)'; ctx.fillRect(px, py, s, s);
+    ctx.fillStyle = '#d49b3a'; ctx.fillRect(px, py, s, Math.max(2, s * 0.3));
+  }
+}
+
 function draw() {
   const W = cv.clientWidth, H = cv.clientHeight, s = view.s, ox = view.ox, oy = view.oy;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -372,13 +389,7 @@ function draw() {
   for (const [k, t] of M.cells) {
     const cx = k % 1024, cy = Math.floor(k / 1024), px = ox + cx * s, py = oy + cy * s;
     if (px + s < 0 || py + s < 0 || px > W || py > H) continue;
-    if (t === 'solid') {
-      ctx.fillStyle = '#667085'; ctx.fillRect(px, py, s, s);
-      if (s >= 8) { ctx.strokeStyle = 'rgba(0,0,0,.28)'; ctx.lineWidth = 1; ctx.strokeRect(px + .5, py + .5, s - 1, s - 1); }
-    } else {
-      ctx.fillStyle = 'rgba(212,155,58,.14)'; ctx.fillRect(px, py, s, s);
-      ctx.fillStyle = '#d49b3a'; ctx.fillRect(px, py, s, Math.max(2, s * 0.3));
-    }
+    drawCell(t, px, py);
   }
 
   // piezas (las bombillas van encima de la oscuridad)
@@ -406,11 +417,38 @@ function draw() {
   // borde del mapa
   ctx.lineWidth = 2; ctx.strokeStyle = '#3b4352'; ctx.strokeRect(ox - 1, oy - 1, M.w * s + 2, M.h * s + 2);
 
-  // selección
-  const se = getEnt(sel);
-  if (se) {
-    ctx.setLineDash([5, 3]); ctx.lineWidth = 2; ctx.strokeStyle = '#5aa2ff';
-    ctx.strokeRect(ox + se.x * s - 1.5, oy + se.y * s - 1.5, se.w * s + 3, se.h * s + 3);
+  // selección (los bloques se levantan del mapa mientras se arrastran)
+  if (drag && drag.mode === 'move') {
+    for (const c of drag.cells) {
+      const px = ox + (c.x + drag.dx) * s, py = oy + (c.y + drag.dy) * s;
+      drawCell(c.type, px, py);
+      ctx.fillStyle = 'rgba(90,162,255,.3)'; ctx.fillRect(px, py, s, s);
+    }
+  } else {
+    ctx.fillStyle = 'rgba(90,162,255,.3)';
+    for (const k of selCells) ctx.fillRect(ox + (k % 1024) * s, oy + Math.floor(k / 1024) * s, s, s);
+  }
+  ctx.setLineDash([5, 3]); ctx.lineWidth = 2; ctx.strokeStyle = '#5aa2ff';
+  for (const id of selIds) {
+    const se = getEnt(id);
+    if (se) ctx.strokeRect(ox + se.x * s - 1.5, oy + se.y * s - 1.5, se.w * s + 3, se.h * s + 3);
+  }
+  if (drag && drag.mode === 'marquee' && drag.moved) {
+    const xa = Math.min(drag.x0, drag.x1), xb = Math.max(drag.x0, drag.x1), ya = Math.min(drag.y0, drag.y1), yb = Math.max(drag.y0, drag.y1);
+    ctx.fillStyle = 'rgba(90,162,255,.12)'; ctx.fillRect(ox + xa * s, oy + ya * s, (xb - xa + 1) * s, (yb - ya + 1) * s);
+    ctx.lineWidth = 1.5; ctx.strokeRect(ox + xa * s, oy + ya * s, (xb - xa + 1) * s, (yb - ya + 1) * s);
+  }
+  ctx.setLineDash([]);
+
+  // sello de pegado
+  if (pasting && clip && hover) {
+    const a = pasteAnchor(hover.cx, hover.cy);
+    ctx.globalAlpha = .55;
+    for (const c of clip.cells) drawCell(c.type, ox + (a.x + c.x) * s, oy + (a.y + c.y) * s);
+    ctx.globalAlpha = 1;
+    for (const e of clip.ents) drawEnt({ ...e, x: a.x + e.x, y: a.y + e.y }, .55);
+    ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff';
+    ctx.strokeRect(ox + a.x * s, oy + a.y * s, clip.w * s, clip.h * s);
     ctx.setLineDash([]);
   }
 
@@ -467,10 +505,11 @@ function entAt(cx, cy) {
 }
 function eraseAt(cx, cy) {
   if (cx < 0 || cy < 0 || cx >= M.w || cy >= M.h) return;
-  if (M.cells.delete(CELL_KEY(cx, cy))) drag.changed = true;
+  const k = CELL_KEY(cx, cy);
+  if (M.cells.delete(k)) { drag.changed = true; selCells.delete(k); }
   const n = M.ents.length;
   M.ents = M.ents.filter(e => !(cx >= e.x && cx < e.x + e.w && cy >= e.y && cy < e.y + e.h));
-  if (M.ents.length !== n) { drag.changed = true; if (!getEnt(sel)) sel = null; }
+  if (M.ents.length !== n) { drag.changed = true; for (const id of [...selIds]) if (!getEnt(id)) selIds.delete(id); }
 }
 function applyRect(d) {
   const xa = Math.max(0, Math.min(d.x0, d.x1)), xb = Math.min(M.w - 1, Math.max(d.x0, d.x1));
@@ -486,16 +525,126 @@ function place(type, cx, cy) {
   if (type === 'door') en.open = false;
   if (type === 'weapon_base') en.item = '';
   M.ents.push(en);
-  sel = en.id;
+  selIds = new Set([en.id]); selCells = new Set();
   commit();
 }
 function deleteSelected() {
-  if (!getEnt(sel)) return;
-  M.ents = M.ents.filter(e => e.id !== sel); sel = null; commit();
+  if (!hasSel()) return;
+  for (const k of selCells) M.cells.delete(k);
+  M.ents = M.ents.filter(e => !selIds.has(e.id));
+  clearSel(); commit();
+}
+
+// ---- selección múltiple, mover, copiar y pegar
+const cellX = k => k % 1024, cellY = k => Math.floor(k / 1024);
+function selBounds() {
+  let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+  const add = (x, y, w, h) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w - 1); y1 = Math.max(y1, y + h - 1); };
+  for (const id of selIds) { const e = getEnt(id); if (e) add(e.x, e.y, e.w, e.h); }
+  for (const k of selCells) if (M.cells.has(k)) add(cellX(k), cellY(k), 1, 1);
+  return x1 < 0 ? null : { x0, y0, x1, y1 };
+}
+function selectRect(x0, y0, x1, y1, add) {
+  const xa = Math.min(x0, x1), xb = Math.max(x0, x1), ya = Math.min(y0, y1), yb = Math.max(y0, y1);
+  if (!add) clearSel();
+  for (const e of M.ents) if (e.x <= xb && e.x + e.w - 1 >= xa && e.y <= yb && e.y + e.h - 1 >= ya) selIds.add(e.id);
+  for (const k of M.cells.keys()) { const x = cellX(k), y = cellY(k); if (x >= xa && x <= xb && y >= ya && y <= yb) selCells.add(k); }
+}
+function selectAll() {
+  clearSel();
+  for (const e of M.ents) selIds.add(e.id);
+  for (const k of M.cells.keys()) selCells.add(k);
+}
+function selectDown(c, add) {
+  const en = entAt(c.cx, c.cy), key = CELL_KEY(c.cx, c.cy);
+  const onSel = !add && ((en && selIds.has(en.id)) || (!en && M.cells.has(key) && selCells.has(key)));
+  if (onSel) { startMove(c); return; }
+  if (en && !add) { clearSel(); selIds.add(en.id); refreshUI(); startMove(c); return; }
+  drag = { mode: 'marquee', add, x0: clamp(c.cx, 0, M.w - 1), y0: clamp(c.cy, 0, M.h - 1), x1: clamp(c.cx, 0, M.w - 1), y1: clamp(c.cy, 0, M.h - 1), moved: false, hit: c };
+  if (!add) { clearSel(); refreshUI(); }
+}
+function finishMarquee(d) {
+  if (d.moved) selectRect(d.x0, d.y0, d.x1, d.y1, d.add);
+  else {  // click suelto: coge lo que haya bajo el cursor
+    const en = entAt(d.hit.cx, d.hit.cy), key = CELL_KEY(d.hit.cx, d.hit.cy);
+    if (en) { if (d.add && selIds.has(en.id)) selIds.delete(en.id); else selIds.add(en.id); }
+    else if (M.cells.has(key)) { if (d.add && selCells.has(key)) selCells.delete(key); else selCells.add(key); }
+  }
+  refreshUI();
+}
+function startMove(c) {
+  const b = selBounds(); if (!b) return;
+  const ents = [...selIds].map(getEnt).filter(Boolean).map(e => ({ e, x: e.x, y: e.y }));
+  const cells = [];
+  for (const k of selCells) { const t = M.cells.get(k); if (t) cells.push({ x: cellX(k), y: cellY(k), type: t }); }
+  for (const c2 of cells) M.cells.delete(CELL_KEY(c2.x, c2.y));   // se levantan y se sueltan al terminar
+  drag = { mode: 'move', sx: c.cx, sy: c.cy, dx: 0, dy: 0, moved: false, ents, cells, minDx: -b.x0, maxDx: M.w - 1 - b.x1, minDy: -b.y0, maxDy: M.h - 1 - b.y1 };
+}
+function finishMove(d) {
+  selCells = new Set();
+  for (const c of d.cells) { const k = CELL_KEY(c.x + d.dx, c.y + d.dy); M.cells.set(k, c.type); selCells.add(k); }
+  if (d.moved) commit(); else refreshUI();
 }
 function nudge(dx, dy) {
-  const e = getEnt(sel); if (!e) return;
-  e.x = clamp(e.x + dx, 0, M.w - e.w); e.y = clamp(e.y + dy, 0, M.h - e.h); commit();
+  const b = selBounds(); if (!b) return;
+  dx = clamp(dx, -b.x0, M.w - 1 - b.x1); dy = clamp(dy, -b.y0, M.h - 1 - b.y1);
+  if (!dx && !dy) return;
+  const lifted = [...selCells].map(k => ({ x: cellX(k), y: cellY(k), type: M.cells.get(k) })).filter(c => c.type);
+  for (const c of lifted) M.cells.delete(CELL_KEY(c.x, c.y));
+  for (const id of selIds) { const e = getEnt(id); if (e) { e.x += dx; e.y += dy; } }
+  selCells = new Set();
+  for (const c of lifted) { const k = CELL_KEY(c.x + dx, c.y + dy); M.cells.set(k, c.type); selCells.add(k); }
+  commit();
+}
+function setClip(c) { clip = c; try { localStorage.setItem(CLIP_KEY, JSON.stringify(c)); } catch (e) {} }
+function loadClip() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CLIP_KEY));
+    if (!c || !Number.isFinite(c.w) || !Number.isFinite(c.h)) return;
+    const ok = Number.isInteger;
+    clip = {
+      w: c.w, h: c.h,
+      cells: (c.cells || []).filter(x => x && ok(x.x) && ok(x.y) && (x.type === 'solid' || x.type === 'platform')),
+      ents: (c.ents || []).filter(x => x && DEFS[x.type] && ok(x.x) && ok(x.y) && ok(x.w) && ok(x.h)),
+    };
+    if (!clip.cells.length && !clip.ents.length) clip = null;
+  } catch (e) { clip = null; }
+}
+function copySelection() {
+  const b = selBounds();
+  if (!b) { toast('No hay nada seleccionado'); return false; }
+  const cells = [...selCells].filter(k => M.cells.has(k)).map(k => ({ x: cellX(k) - b.x0, y: cellY(k) - b.y0, type: M.cells.get(k) }));
+  const ents = [...selIds].map(getEnt).filter(Boolean).map(e => { const { id, ...rest } = e; return { ...rest, x: e.x - b.x0, y: e.y - b.y0 }; });
+  setClip({ w: b.x1 - b.x0 + 1, h: b.y1 - b.y0 + 1, cells, ents });
+  toast(`Copiado: ${ents.length} piezas, ${cells.length} bloques`);
+  refreshUI();
+  return true;
+}
+function cutSelection() { if (copySelection()) deleteSelected(); }
+function startPaste() {
+  if (!clip) { toast('No hay nada copiado'); return; }
+  setTool('select'); pasting = true; cv.style.cursor = 'crosshair';
+  toast('Click para pegar (tantas veces como quieras) · Esc para salir');
+  requestDraw();
+}
+function pasteAnchor(cx, cy) {   // el cursor queda en la fila de abajo, centrado
+  return { x: clamp(cx - Math.floor((clip.w - 1) / 2), 0, Math.max(0, M.w - clip.w)), y: clamp(cy - clip.h + 1, 0, Math.max(0, M.h - clip.h)) };
+}
+function placeClipboard(cx, cy) {
+  const a = pasteAnchor(cx, cy);
+  clearSel();
+  for (const c of clip.cells) {
+    const x = a.x + c.x, y = a.y + c.y;
+    if (x < 0 || y < 0 || x >= M.w || y >= M.h) continue;
+    const k = CELL_KEY(x, y); M.cells.set(k, c.type); selCells.add(k);
+  }
+  for (const e of clip.ents) {
+    const x = a.x + e.x, y = a.y + e.y;
+    if (x < 0 || y < 0 || x + e.w > M.w || y + e.h > M.h) continue;
+    const ne = { ...e, x, y, id: M.nextId++ };
+    M.ents.push(ne); selIds.add(ne.id);
+  }
+  commit();
 }
 
 function toCell(ev) {
@@ -511,11 +660,9 @@ cv.addEventListener('pointerdown', e => {
     drag = { mode: 'pan', lx: e.clientX, ly: e.clientY }; cv.style.cursor = 'grabbing'; return;
   }
   if (e.button !== 0) return;
+  if (pasting && clip) { placeClipboard(c.cx, c.cy); requestDraw(); return; }
   if (tool === 'select') {
-    const en = entAt(c.cx, c.cy);
-    if (en) { sel = en.id; drag = { mode: 'move', id: en.id, dx: c.cx - en.x, dy: c.cy - en.y, moved: false }; }
-    else sel = null;
-    refreshUI();
+    selectDown(c, e.shiftKey);
   } else if (tool === 'solid' || tool === 'platform') {
     const erase = e.shiftKey;
     if (e.ctrlKey || e.metaKey) drag = { mode: 'rect', type: tool, erase, x0: c.cx, y0: c.cy, x1: c.cx, y1: c.cy, changed: false };
@@ -535,11 +682,13 @@ cv.addEventListener('pointermove', e => {
     else if (drag.mode === 'erase') { lineCells(drag.last.cx, drag.last.cy, c.cx, c.cy, (x, y) => eraseAt(x, y)); drag.last = c; }
     else if (drag.mode === 'rect') { drag.x1 = c.cx; drag.y1 = c.cy; }
     else if (drag.mode === 'move') {
-      const en = getEnt(drag.id);
-      if (en) {
-        const nx = clamp(c.cx - drag.dx, 0, M.w - en.w), ny = clamp(c.cy - drag.dy, 0, M.h - en.h);
-        if (nx !== en.x || ny !== en.y) { en.x = nx; en.y = ny; drag.moved = true; }
-      }
+      const dx = clamp(c.cx - drag.sx, drag.minDx, drag.maxDx), dy = clamp(c.cy - drag.sy, drag.minDy, drag.maxDy);
+      drag.dx = dx; drag.dy = dy; drag.moved = dx !== 0 || dy !== 0;
+      for (const o of drag.ents) { o.e.x = o.x + dx; o.e.y = o.y + dy; }
+    }
+    else if (drag.mode === 'marquee') {
+      if (c.cx !== drag.x0 || c.cy !== drag.y0) drag.moved = true;
+      drag.x1 = clamp(c.cx, 0, M.w - 1); drag.y1 = clamp(c.cy, 0, M.h - 1);
     }
   }
   requestDraw();
@@ -550,7 +699,9 @@ function endDrag() {
   cv.style.cursor = spaceDown ? 'grab' : toolCursor();
   if (d.mode === 'rect') { drag = d; applyRect(d); drag = null; }
   if (d.mode === 'pan') { requestDraw(); return; }
-  if (d.changed || d.moved || d.mode === 'rect') commit();
+  if (d.mode === 'marquee') { finishMarquee(d); requestDraw(); return; }
+  if (d.mode === 'move') { finishMove(d); requestDraw(); return; }
+  if (d.changed || d.mode === 'rect') commit();
   requestDraw();
 }
 cv.addEventListener('pointerup', endDrag);
@@ -571,16 +722,23 @@ addEventListener('keydown', e => {
   const ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (ctrl && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && k === 'y') { e.preventDefault(); redo(); return; }
+  if (ctrl && k === 'c') { e.preventDefault(); copySelection(); return; }
+  if (ctrl && k === 'x') { e.preventDefault(); cutSelection(); return; }
+  if (ctrl && k === 'v') { e.preventDefault(); startPaste(); return; }
+  if (ctrl && k === 'a') { e.preventDefault(); setTool('select'); selectAll(); refreshUI(); return; }
   if (ctrl) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); return; }
-  if (e.key === 'Escape') { sel = null; closeMenu(); refreshUI(); return; }
-  if (e.key.startsWith('Arrow') && getEnt(sel)) {
+  if (e.key === 'Escape') { clearSel(); pasting = false; closeMenu(); refreshUI(); return; }
+  if (e.key.startsWith('Arrow') && hasSel()) {
     e.preventDefault();
     nudge(e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0, e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0);
     return;
   }
   const t = TOOLS.find(t => t.key === e.key); if (t) { setTool(t.id); return; }
-  if (k === 'l') { const en = getEnt(sel); if (en && en.type === 'light') { en.on = en.on === false; commit(); } }
+  if (k === 'l') {
+    const lights = [...selIds].map(getEnt).filter(en => en && en.type === 'light');
+    if (lights.length) { const on = lights.some(en => en.on === false); for (const en of lights) en.on = on; commit(); }
+  }
   if (k === 'g') { $('#oGrid').click(); }
   if (k === 'f') fitView();
 });
@@ -589,7 +747,7 @@ addEventListener('keyup', e => { if (e.code === 'Space') { spaceDown = false; cv
 // ---- UI
 const toolCursor = () => tool === 'select' ? 'default' : 'crosshair';
 function setTool(id) {
-  tool = id; cv.style.cursor = toolCursor();
+  tool = id; pasting = false; cv.style.cursor = toolCursor();
   document.querySelectorAll('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === id));
   requestDraw();
 }
@@ -600,8 +758,10 @@ function buildTools() {
   h += '<h4>Luces</h4><button id="bLightsOn">Encender todas</button><button id="bLightsOff">Apagar todas</button>';
   h += `<h4>Controles</h4><div class="help">
     <b>Rueda</b> zoom<br><b>Click derecho</b> o <b>Espacio</b>+arrastrar: mover vista<br>
-    <b>Arrastrar</b> pinta bloques<br><b>Shift</b>+arrastrar borra bloques<br><b>Ctrl</b>+arrastrar rectángulo<br>
-    <b>Flechas</b> mueven la pieza<br><b>Supr</b> borra pieza · <b>L</b> luz on/off<br><b>F</b> encuadrar · <b>G</b> rejilla<br><br>
+    <b>Pintar:</b> arrastrar · <b>Shift</b> borra · <b>Ctrl</b> rectángulo<br>
+    <b>Seleccionar:</b> click, o arrastrar para marcar varias (piezas y bloques) · <b>Shift</b> añade · arrastrar lo marcado lo mueve<br>
+    <b>Ctrl+C / X / V</b> copiar, cortar, pegar (click para pegar, Esc para salir) · <b>Ctrl+A</b> todo<br>
+    <b>Flechas</b> mueven · <b>Supr</b> borra · <b>L</b> luz on/off<br><b>F</b> encuadrar · <b>G</b> rejilla<br><br>
     1 bloque = ${BLOCK_PX} px en Godot.</div>`;
   box.innerHTML = h;
   box.addEventListener('click', e => {
@@ -625,8 +785,20 @@ function updateStatus() {
 }
 
 function renderInspector() {
-  const box = $('#inspector'), en = getEnt(sel);
-  if (!en) { box.innerHTML = '<div class="muted">Nada seleccionado. Con <b>Seleccionar (1)</b> pulsa una pieza.</div>'; return; }
+  const box = $('#inspector'), en = single();
+  const pasteBtn = clip ? '<button id="bPaste">Pegar (Ctrl+V)</button>' : '';
+  const wire = (id, fn) => { const b = $(id); if (b) b.onclick = fn; };
+  if (!en) {
+    if (!hasSel()) {
+      box.innerHTML = '<div class="muted">Nada seleccionado. Con <b>Seleccionar (1)</b> haz click en una pieza o arrastra para marcar varias.</div>' + (pasteBtn ? '<div class="row btns">' + pasteBtn + '</div>' : '');
+    } else {
+      box.innerHTML = `<div class="row"><strong>Selección</strong></div><div class="muted">${selIds.size} piezas · ${selCells.size} bloques</div>` +
+        '<div class="row btns"><button id="bCopy">Copiar</button><button id="bCut">Cortar</button><button id="bDel" class="danger">Borrar</button></div>' +
+        (pasteBtn ? '<div class="row btns">' + pasteBtn + '</div>' : '');
+    }
+    wire('#bPaste', startPaste); wire('#bCopy', copySelection); wire('#bCut', cutSelection); wire('#bDel', deleteSelected);
+    return;
+  }
   const d = DEFS[en.type];
   let h = `<div class="row"><strong>${esc(d.label)}</strong><span class="muted">${en.w}×${en.h}</span></div>`;
   h += `<div class="row"><label>x</label><input type="number" data-f="x" value="${en.x}"><label>y</label><input type="number" data-f="y" value="${en.y}"></div>`;
@@ -634,17 +806,18 @@ function renderInspector() {
   if (en.type === 'door') h += `<div class="row"><label>ancho</label><input type="number" data-f="w" min="1" max="20" value="${en.w}"><label>alto</label><input type="number" data-f="h" min="1" max="30" value="${en.h}"></div>
     <div class="row"><label for="fOpen">Abierta</label><input type="checkbox" id="fOpen" data-f="open" ${en.open ? 'checked' : ''}></div><div class="muted">Los mapas actuales usan 2×5.</div>`;
   if (en.type === 'weapon_base') h += `<div class="row"><label>Objeto</label><input type="text" data-f="item" maxlength="40" placeholder="(vacío = al azar)" value="${esc(en.item || '')}"></div>`;
-  h += '<div class="row btns"><button id="bDup">Duplicar</button><button id="bDel" class="danger">Borrar</button></div>';
+  h += '<div class="row btns"><button id="bDup">Duplicar</button><button id="bCopy">Copiar</button><button id="bDel" class="danger">Borrar</button></div>';
+  if (pasteBtn) h += '<div class="row btns">' + pasteBtn + '</div>';
   box.innerHTML = h;
   $('#bDup').onclick = () => {
     const c = { ...en, id: M.nextId++ };
     c.x = clamp(en.x + en.w, 0, M.w - en.w); c.y = en.y;
-    M.ents.push(c); sel = c.id; commit();
+    M.ents.push(c); selIds = new Set([c.id]); selCells = new Set(); commit();
   };
-  $('#bDel').onclick = deleteSelected;
+  wire('#bCopy', copySelection); wire('#bPaste', startPaste); wire('#bDel', deleteSelected);
 }
 $('#inspector').addEventListener('change', e => {
-  const en = getEnt(sel), f = e.target.dataset && e.target.dataset.f;
+  const en = single(), f = e.target.dataset && e.target.dataset.f;
   if (!en || !f) return;
   if (f === 'on' || f === 'open') en[f] = e.target.checked;
   else if (f === 'item') en.item = String(e.target.value).slice(0, 40);
@@ -680,7 +853,7 @@ function resizeMap() {
   if ((outCells || outEnts) && !confirm(`Al reducir el mapa se pierden ${outCells} bloques y ${outEnts} piezas que quedan fuera. ¿Seguir?`)) { syncHeader(); return; }
   for (const k of [...M.cells.keys()]) if (k % 1024 >= w || Math.floor(k / 1024) >= h) M.cells.delete(k);
   M.ents = M.ents.filter(e => e.x + e.w <= w && e.y + e.h <= h);
-  M.w = w; M.h = h; sel = null; syncHeader(); commit();
+  M.w = w; M.h = h; clearSel(); syncHeader(); commit();
 }
 $('#gw').addEventListener('change', resizeMap);
 $('#gh').addEventListener('change', resizeMap);
@@ -786,6 +959,7 @@ document.addEventListener('click', e => { if (!e.target.closest('.dd')) closeMen
     if (raw) M = jsonToModel(JSON.parse(raw)).model;
   } catch (e) { M = newModel(); }
   hist.stack = [snapshot()]; hist.i = 0;
+  loadClip();
   syncHeader(); resize(); fitView(); refreshUI();
   new ResizeObserver(resize).observe(stage);
 })();
