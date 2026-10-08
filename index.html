@@ -34,6 +34,8 @@ button.danger:hover{border-color:var(--danger);color:var(--danger)}
 .menu-item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line)}
 .menu-item:last-child{border-bottom:0}
 .menu-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu-item .btns{display:flex;gap:6px;flex:none}
+.menu-item .btns button{padding:3px 8px}
 #tools{background:var(--panel);border-right:1px solid var(--line);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px}
 #tools h4,#side h4{margin:10px 0 4px;font-size:11px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--dim)}
 #tools h4:first-child{margin-top:2px}
@@ -885,13 +887,16 @@ $('#file').onchange = async e => {
 };
 $('#bExport').onclick = () => {
   if (VALIDATE_ENABLED) { const p = validate(M); if (p.length) toast(p.join(' · ')); }
-  const text = formatMap(modelToJSON(M));
+  downloadText(formatMap(modelToJSON(M)), safeName(M.name) + '.json');
+};
+const safeName = n => n.trim().replace(/[^\w.-]+/g, '_') || 'mapa';
+function downloadText(text, filename) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-  a.download = (M.name.trim().replace(/[^\w.-]+/g, '_') || 'mapa') + '.json';
+  a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-};
+}
 
 // ---- mapas del repo
 function detectRepo() {
@@ -920,9 +925,13 @@ async function loadRepoList() {
     for (const f of files) {
       const row = document.createElement('div'); row.className = 'menu-item';
       const nm = document.createElement('span'); nm.textContent = f.name.replace(/\.json$/i, ''); nm.title = f.name;
-      const b = document.createElement('button'); b.textContent = 'Abrir copia';
+      const btns = document.createElement('div'); btns.className = 'btns';
+      const b = document.createElement('button'); b.textContent = 'Abrir copia'; b.title = 'Abrirlo en el editor como copia';
       b.onclick = () => openRepoMap(f);
-      row.append(nm, b); list.appendChild(row);
+      const dl = document.createElement('button'); dl.textContent = 'Descargar'; dl.title = 'Guardar una copia en tu PC';
+      dl.onclick = () => downloadRepoMap(f);
+      btns.append(b, dl);
+      row.append(nm, btns); list.appendChild(row);
     }
     repoLoaded = true;
   } catch (err) {
@@ -941,6 +950,17 @@ async function openRepoMap(f) {
     closeMenu();
     toast('«' + base + '» abierto como copia. Al exportar se guarda como ' + model.name + '.json' + (warnings.length ? ' · ' + warnings.join(' · ') : ''));
   } catch (err) { toast('No se pudo abrir ' + f.name + ': ' + err.message); }
+}
+async function downloadRepoMap(f) {
+  try {
+    const r = await fetch(f.download_url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const { model } = jsonToModel(await r.json());
+    const base = (model.name || f.name.replace(/\.json$/i, '')).replace(/_copia$/, '');
+    model.name = (base + '_copia').slice(0, 60);
+    downloadText(formatMap(modelToJSON(model)), safeName(model.name) + '.json');
+    toast('Descargado ' + safeName(model.name) + '.json (mira en Descargas)');
+  } catch (err) { toast('No se pudo descargar ' + f.name + ': ' + err.message); }
 }
 $('#repoName').textContent = REPO.owner + '/' + REPO.name + ' · maps/';
 $('#bRepo').onclick = e => {
