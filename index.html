@@ -56,6 +56,14 @@ button.danger:hover{border-color:var(--danger);color:var(--danger)}
 .row.btns{justify-content:flex-start;margin-top:12px}
 .muted{color:var(--dim)}
 footer{grid-column:1/4;display:flex;justify-content:space-between;gap:12px;padding:5px 12px;background:var(--panel);border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+.modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px}
+.modal[hidden]{display:none}
+.modal .panel{width:min(440px,100%);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.modal h3{margin:0 0 10px;font-size:15px}
+.modal label{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0;color:var(--dim)}
+.modal label input{width:290px}
+.modal .note{margin:10px 0;color:var(--dim);font-size:12px;line-height:1.5}
+.modal .note b{color:var(--text)}
 #toast{position:fixed;left:50%;bottom:44px;transform:translateX(-50%);background:#0b0d11;border:1px solid var(--line);padding:8px 14px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:30;max-width:80vw}
 #toast.show{opacity:1}
 </style>
@@ -72,7 +80,9 @@ footer{grid-column:1/4;display:flex;justify-content:space-between;gap:12px;paddi
     <span class="sep"></span>
     <button id="bNew">Nuevo</button>
     <button id="bImport">Importar</button>
-    <button id="bExport" class="primary">Exportar JSON</button>
+    <button id="bExport">Exportar JSON</button>
+    <button id="bSave" class="primary" title="Guarda el mapa en el repo del juego">Guardar en repo</button>
+    <button id="bCfg" title="Repo, rama y token">⚙</button>
     <div class="dd">
       <button id="bRepo">Mapas del repo ▾</button>
       <div id="repoMenu" class="menu" hidden>
@@ -94,6 +104,17 @@ footer{grid-column:1/4;display:flex;justify-content:space-between;gap:12px;paddi
   </aside>
 
   <footer><span id="stL"></span><span id="stR"></span></footer>
+</div>
+<div id="modal" class="modal" hidden>
+  <div class="panel">
+    <h3>Guardar en el repo</h3>
+    <label>Repo <input type="text" id="cRepo" spellcheck="false" placeholder="usuario/repo"></label>
+    <label>Rama <input type="text" id="cBranch" spellcheck="false"></label>
+    <label>Carpeta <input type="text" id="cDir" spellcheck="false"></label>
+    <label>Token <input type="password" id="cToken" autocomplete="off" spellcheck="false"></label>
+    <p class="note">Token fine-grained de GitHub, solo para ese repo, con permiso <b>Contents: Read and write</b>. Se guarda únicamente en este navegador. Si el repo es privado, también hace falta para ver y abrir los mapas.</p>
+    <div class="row btns"><button id="cSave" class="primary">Guardar ajustes</button><button id="cCancel">Cancelar</button><button id="cForget" class="danger">Olvidar token</button></div>
+  </div>
 </div>
 <input type="file" id="file" accept=".json,application/json" hidden>
 <div id="toast"></div>
@@ -718,6 +739,7 @@ cv.addEventListener('wheel', e => {
 }, { passive: false });
 
 addEventListener('keydown', e => {
+  if (!$('#modal').hidden) return;
   const typing = e.target.matches && e.target.matches('input,textarea,select');
   if (e.code === 'Space' && !typing) { spaceDown = true; cv.style.cursor = 'grab'; e.preventDefault(); return; }
   if (typing) return;
@@ -839,9 +861,9 @@ function refreshUI() {
 }
 
 let toastT;
-function toast(msg) {
+function toast(msg, ms = 3200) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3200);
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms);
 }
 
 // ---- cabecera
@@ -887,7 +909,9 @@ $('#file').onchange = async e => {
 };
 $('#bExport').onclick = () => {
   if (VALIDATE_ENABLED) { const p = validate(M); if (p.length) toast(p.join(' · ')); }
-  downloadText(formatMap(modelToJSON(M)), safeName(M.name) + '.json');
+  const json = modelToJSON(M), text = formatMap(json), probs = limitProblems(json, text);
+  downloadText(text, safeName(M.name) + '.json');
+  if (probs.length) toast('Ojo, el juego no cargará este mapa: ' + probs.join(' · '), 7000);
 };
 const safeName = n => n.trim().replace(/[^\w.-]+/g, '_') || 'mapa';
 function downloadText(text, filename) {
@@ -898,29 +922,107 @@ function downloadText(text, filename) {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
-// ---- mapas del repo
-function detectRepo() {
-  const q = new URLSearchParams(location.search).get('repo');
-  if (q && /^[\w.-]+\/[\w.-]+$/.test(q)) { const [owner, name] = q.split('/'); return { owner, name }; }
-  if (location.hostname.endsWith('.github.io')) {
-    const owner = location.hostname.split('.')[0], name = location.pathname.split('/')[1];
-    if (name) return { owner, name };
-  }
-  return { owner: 'xNeku', name: 'FlashMapMaker' };
+// ---- repo del juego: ajustes, lista, abrir, descargar y guardar
+const CFG_KEY = 'flashmapmaker.cfg.v1', TOKEN_KEY = 'flashmapmaker.token.v1';
+const DEFAULT_CFG = { repo: 'xNeku/godot-multiplayer-high-level', branch: 'escala-y-mapas', dir: 'maps' };
+const LIMITS = { bytes: 512 * 1024, grid: 512, rects: 5000, ents: 2000 };  // lo que acepta el juego al cargar
+let CFG = { ...DEFAULT_CFG }, TOKEN = '';
+const validCfg = c => /^[\w.-]+\/[\w.-]+$/.test(c.repo) && /^[\w./-]+$/.test(c.branch) && /^[\w./-]*$/.test(c.dir);
+try { Object.assign(CFG, JSON.parse(localStorage.getItem(CFG_KEY)) || {}); } catch (e) {}
+try { TOKEN = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}
+if (!validCfg(CFG)) CFG = { ...DEFAULT_CFG };
+
+const encPath = p => p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+const refQ = () => '?ref=' + encodeURIComponent(CFG.branch);
+const filePath = file => (CFG.dir ? CFG.dir + '/' : '') + file;
+function gh(path, opts = {}) {
+  const headers = { Accept: 'application/vnd.github+json', ...(opts.headers || {}) };
+  if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+  return fetch('https://api.github.com' + path, { ...opts, headers });
 }
-const REPO = detectRepo();
+async function ghError(res) {
+  let msg = ''; try { msg = (await res.json()).message || ''; } catch (e) {}
+  const hint = {
+    401: 'el token no vale o ha caducado (⚙)',
+    403: 'el token no tiene permiso de escritura en Contents, o GitHub está limitando las peticiones',
+    404: 'el repo o la rama no existe, o el token no llega a ese repo (⚙)',
+    409: 'alguien ha guardado a la vez, vuelve a pulsar Guardar',
+    422: 'GitHub lo ha rechazado (¿existe la rama?)',
+  }[res.status] || '';
+  return new Error(res.status + (hint ? ' · ' + hint : '') + (msg ? ' (' + msg + ')' : ''));
+}
+async function fetchRepoText(path) {
+  const r = await gh(`/repos/${CFG.repo}/contents/${encPath(path)}${refQ()}`, { headers: { Accept: 'application/vnd.github.raw+json' } });
+  if (!r.ok) throw await ghError(r);
+  return r.text();
+}
+function utf8ToB64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function b64ToUtf8(b64) {
+  const bin = atob(b64.replace(/\s/g, ''));
+  return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+}
+// nombre de archivo: solo letras, números, guion y guion bajo
+const repoFileName = n => n.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'mapa';
+function limitProblems(json, text) {
+  const out = [], bytes = new TextEncoder().encode(text).length;
+  if (bytes > LIMITS.bytes) out.push(`pesa ${Math.ceil(bytes / 1024)} KB (máx. ${LIMITS.bytes / 1024} KB)`);
+  if (json.grid.w > LIMITS.grid || json.grid.h > LIMITS.grid) out.push(`rejilla ${json.grid.w}×${json.grid.h} (máx. ${LIMITS.grid}×${LIMITS.grid})`);
+  const rects = json.tiles.solid.length + json.tiles.platform.length;
+  if (rects > LIMITS.rects) out.push(`${rects} rectángulos (máx. ${LIMITS.rects})`);
+  if (json.entities.length > LIMITS.ents) out.push(`${json.entities.length} entidades (máx. ${LIMITS.ents})`);
+  return out;
+}
+
+// ---- ajustes (repo, rama, carpeta, token)
+const updateRepoLabel = () => { $('#repoName').textContent = `${CFG.repo} · ${CFG.branch} · ${CFG.dir || '/'}`; };
+function openCfg() {
+  $('#cRepo').value = CFG.repo; $('#cBranch').value = CFG.branch; $('#cDir').value = CFG.dir;
+  $('#cToken').value = ''; $('#cToken').placeholder = TOKEN ? '(guardado; vacío = mantenerlo)' : 'github_pat_…';
+  $('#modal').hidden = false; $('#cRepo').focus();
+}
+function closeCfg() { $('#modal').hidden = true; }
+$('#bCfg').onclick = openCfg;
+$('#cCancel').onclick = closeCfg;
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeCfg(); });
+$('#modal').addEventListener('keydown', e => { if (e.key === 'Escape') closeCfg(); });
+$('#cSave').onclick = () => {
+  const c = {
+    repo: $('#cRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/+$/, ''),
+    branch: $('#cBranch').value.trim(),
+    dir: $('#cDir').value.trim().replace(/^\/+|\/+$/g, ''),
+  };
+  if (!validCfg(c)) { toast('Revisa el repo (usuario/repo), la rama y la carpeta'); return; }
+  CFG = c;
+  const t = $('#cToken').value.trim(); if (t) TOKEN = t;
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(CFG)); if (t) localStorage.setItem(TOKEN_KEY, TOKEN); } catch (e) {}
+  repoLoaded = false; updateRepoLabel(); closeCfg();
+  toast(TOKEN ? 'Ajustes guardados' : 'Ajustes guardados (falta el token para poder guardar mapas)');
+};
+$('#cForget').onclick = () => {
+  TOKEN = ''; try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+  repoLoaded = false; $('#cToken').placeholder = 'github_pat_…'; toast('Token olvidado');
+};
+
+// ---- lista de mapas del repo, abrir y descargar
 let repoLoaded = false;
 function closeMenu() { $('#repoMenu').hidden = true; }
 async function loadRepoList() {
   const list = $('#repoList');
   list.innerHTML = '<div class="menu-msg">Cargando…</div>';
   try {
-    const r = await fetch(`https://api.github.com/repos/${REPO.owner}/${REPO.name}/contents/maps`, { headers: { Accept: 'application/vnd.github+json' } });
-    if (r.status === 404) { list.innerHTML = '<div class="menu-msg">Todavía no hay carpeta <b>maps/</b> en el repo (o el repo es privado).</div>'; return; }
-    if (r.status === 403) { list.innerHTML = '<div class="menu-msg">GitHub ha limitado las peticiones. Prueba en unos minutos.</div>'; return; }
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const r = await gh(`/repos/${CFG.repo}/contents/${encPath(CFG.dir)}${refQ()}`);
+    if (r.status === 404) {
+      list.innerHTML = `<div class="menu-msg">No encuentro <b>${esc(CFG.dir || '/')}</b> en la rama <b>${esc(CFG.branch)}</b>. ${TOKEN ? 'Revisa el repo y la rama en ⚙.' : 'Si el repo es privado, pon el token en ⚙.'}</div>`;
+      return;
+    }
+    if (!r.ok) throw await ghError(r);
     const files = (await r.json()).filter(f => f.type === 'file' && /\.json$/i.test(f.name)).sort((a, b) => a.name.localeCompare(b.name));
-    if (!files.length) { list.innerHTML = '<div class="menu-msg">No hay mapas .json en <b>maps/</b>.</div>'; return; }
+    if (!files.length) { list.innerHTML = `<div class="menu-msg">No hay mapas .json en <b>${esc(CFG.dir || '/')}</b>.</div>`; return; }
     list.innerHTML = '';
     for (const f of files) {
       const row = document.createElement('div'); row.className = 'menu-item';
@@ -941,28 +1043,24 @@ async function loadRepoList() {
 async function openRepoMap(f) {
   if (!isEmpty() && !confirm('Esto reemplaza el mapa actual (se puede deshacer). ¿Seguir?')) return;
   try {
-    const r = await fetch(f.download_url);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const { model, warnings } = jsonToModel(await r.json());
+    const { model, warnings } = jsonToModel(JSON.parse(await fetchRepoText(f.path)));
     const base = (model.name || f.name.replace(/\.json$/i, '')).replace(/_copia$/, '');
     model.name = (base + '_copia').slice(0, 60);
     replaceModel(model, true);
     closeMenu();
-    toast('«' + base + '» abierto como copia. Al exportar se guarda como ' + model.name + '.json' + (warnings.length ? ' · ' + warnings.join(' · ') : ''));
-  } catch (err) { toast('No se pudo abrir ' + f.name + ': ' + err.message); }
+    toast('«' + base + '» abierto como copia. Al guardar se llamará ' + repoFileName(model.name) + '.json' + (warnings.length ? ' · ' + warnings.join(' · ') : ''), 5000);
+  } catch (err) { toast('No se pudo abrir ' + f.name + ': ' + err.message, 6000); }
 }
 async function downloadRepoMap(f) {
   try {
-    const r = await fetch(f.download_url);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const { model } = jsonToModel(await r.json());
+    const { model } = jsonToModel(JSON.parse(await fetchRepoText(f.path)));
     const base = (model.name || f.name.replace(/\.json$/i, '')).replace(/_copia$/, '');
     model.name = (base + '_copia').slice(0, 60);
     downloadText(formatMap(modelToJSON(model)), safeName(model.name) + '.json');
     toast('Descargado ' + safeName(model.name) + '.json (mira en Descargas)');
-  } catch (err) { toast('No se pudo descargar ' + f.name + ': ' + err.message); }
+  } catch (err) { toast('No se pudo descargar ' + f.name + ': ' + err.message, 6000); }
 }
-$('#repoName').textContent = REPO.owner + '/' + REPO.name + ' · maps/';
+updateRepoLabel();
 $('#bRepo').onclick = e => {
   e.stopPropagation();
   const m = $('#repoMenu'); m.hidden = !m.hidden;
@@ -970,6 +1068,34 @@ $('#bRepo').onclick = e => {
 };
 $('#bRepoRefresh').onclick = e => { e.stopPropagation(); loadRepoList(); };
 document.addEventListener('click', e => { if (!e.target.closest('.dd')) closeMenu(); });
+
+// ---- guardar en el repo (API de contenidos de GitHub)
+async function saveToRepo() {
+  if (!TOKEN) { openCfg(); toast('Pon primero tu token de GitHub'); return; }
+  const json = modelToJSON(M), text = formatMap(json);
+  const probs = limitProblems(json, text);
+  if (probs.length && !confirm('El juego no va a cargar este mapa:\n- ' + probs.join('\n- ') + '\n\n¿Guardarlo igualmente?')) return;
+  const file = repoFileName(M.name) + '.json', path = filePath(file);
+  const btn = $('#bSave'); btn.disabled = true; btn.textContent = 'Guardando…';
+  try {
+    const url = `/repos/${CFG.repo}/contents/${encPath(path)}`;
+    let sha = null;
+    const g = await gh(url + refQ());                 // si ya existe, la API exige su sha para sobrescribir
+    if (g.status === 200) {
+      const cur = await g.json(); sha = cur.sha;
+      if (typeof cur.content === 'string' && b64ToUtf8(cur.content) === text) { toast('Ya estaba guardado igual, no hay nada que subir'); return; }
+      if (!confirm(`Ya existe ${path} en la rama ${CFG.branch}. ¿Sobrescribirlo?`)) return;
+    } else if (g.status !== 404) throw await ghError(g);
+    const body = { message: `Mapa ${file} (FlashMapMaker)`, content: utf8ToB64(text), branch: CFG.branch };
+    if (sha) body.sha = sha;
+    const p = await gh(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!p.ok) throw await ghError(p);
+    repoLoaded = false;
+    toast(`Guardado ${path} en la rama ${CFG.branch}. Tras un git pull sale en el selector del lobby`, 6000);
+  } catch (err) { toast('No se pudo guardar: ' + err.message, 8000); }
+  finally { btn.disabled = false; btn.textContent = 'Guardar en repo'; }
+}
+$('#bSave').onclick = saveToRepo;
 
 // ---- arranque
 (function init() {

@@ -10,9 +10,21 @@ Editor de mapas para el juego. Una sola página (`index.html`), sin build ni dep
 - En local: abre `index.html` en el navegador.
 - Activar Pages (una vez): Settings → Pages → Deploy from a branch → `main` / `(root)`.
 
-El mapa se autoguarda en el navegador (`localStorage`). Para guardarlo de verdad: **Exportar JSON** y súbelo a `maps/`.
+El mapa se autoguarda en el navegador (`localStorage`) mientras editas.
 
-**Mapas del repo** (cabecera) lista lo que haya en `maps/` y lo abre como **copia** (`nombre_copia`), así no pisas el original. Lee el repo a partir de la URL de Pages; en local usa `xNeku/FlashMapMaker`. Con `?repo=owner/nombre` se puede apuntar a otro.
+## Guardar en el repo del juego
+
+Los mapas viven en el **repo del juego**, no en este: `xNeku/godot-multiplayer-high-level`, rama `escala-y-mapas`, carpeta `maps/`. El botón **Guardar en repo** sube el mapa como `maps/<nombre>.json` (el nombre se sanea: letras, números, guion y guion bajo). Después de un `git pull` el juego lo ve solo en el selector del lobby, sin importar nada.
+
+- Si el archivo ya existe pregunta antes de sobrescribirlo (la API de GitHub exige el `sha` del existente, el editor lo pide solo). Si está idéntico, no sube nada.
+- **Token (una vez por navegador):** GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. *Repository access*: solo `godot-multiplayer-high-level`. *Permissions → Repository permissions → Contents*: **Read and write**. Se pega en ⚙. Se guarda solo en ese navegador (`localStorage`) y nunca se sube a ningún repo. El de lectura y el de escritura es el mismo.
+- **⚙** también cambia repo, rama y carpeta (por ejemplo cuando `escala-y-mapas` se mezcle con `main`, o si se usa una rama `mapas` aparte). No hace falta tocar código.
+- Avisa antes de guardar si el mapa se pasa de lo que el juego acepta al cargar: 512 KB de texto, rejilla 512×512, 5000 rectángulos (suelo + plataformas) y 2000 entidades. Con **Exportar JSON** también avisa.
+- Sin token no se puede guardar. Si el repo del juego es privado, tampoco se pueden ver ni abrir los mapas: el token hace falta para todo.
+
+**Mapas del repo** (cabecera) lista lo que hay en esa carpeta y rama, es decir, lo mismo que ve el juego. **Abrir copia** lo abre como `nombre_copia` para no pisar el original; **Descargar** baja una copia a tu PC.
+
+**Exportar JSON** descarga el archivo sin tocar ningún repo (sirve para mandárselo a alguien).
 
 ## Controles
 
@@ -77,5 +89,5 @@ Las piezas se colocan con el cursor en su fila de abajo, para que apoyen en el s
 ## Pendiente
 
 - Validación (pasillos, alturas, spawns): hay un hueco en `validate()`, apagado con `VALIDATE_ENABLED`.
-- Botón "Guardar en repo" por la API de GitHub.
-- `MapLoader` en Godot.
+- Guardar sin cuenta de GitHub (para quien no tenga): haría falta un intermediario pequeño con contraseña compartida. De momento esa persona usa **Exportar JSON** y lo manda.
+- El `MapLoader` vive en el repo del juego, no aquí.
