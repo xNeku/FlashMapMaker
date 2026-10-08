@@ -2,10 +2,13 @@
 
 Editor de mapas para el juego. Una sola página (`index.html`), sin build ni dependencias. Funciona en GitHub Pages.
 
+**👉 https://xneku.github.io/FlashMapMaker/**
+
 ## Usarlo
 
+- Online: el enlace de arriba.
 - En local: abre `index.html` en el navegador.
-- En Pages: Settings → Pages → Deploy from a branch → `main` / `(root)`.
+- Activar Pages (una vez): Settings → Pages → Deploy from a branch → `main` / `(root)`.
 
 El mapa se autoguarda en el navegador (`localStorage`). Para guardarlo de verdad: **Exportar JSON** y súbelo a `maps/`.
 
