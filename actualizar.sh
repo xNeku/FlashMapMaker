@@ -1,7 +1,10 @@
 #!/bin/bash
 # Descarga la ultima build de FlashRacs para Mac, la instala en Aplicaciones y la abre.
 set -e
-URL="https://github.com/xNeku/FlashMapMaker/raw/descargas/FlashRacs-mac.zip?t=$(date +%s)"
+# Se descarga del commit exacto: la cache de GitHub sirve copias viejas si se usa el nombre de la rama
+REF="$(curl -fsSL -H "Accept: application/vnd.github.sha" https://api.github.com/repos/xNeku/FlashMapMaker/commits/descargas 2>/dev/null || true)"
+[ ${#REF} -eq 40 ] || REF="descargas"
+URL="https://github.com/xNeku/FlashMapMaker/raw/$REF/FlashRacs-mac.zip"
 TMP="$(mktemp -d)"
 echo "Descargando FlashRacs..."
 curl -fL --progress-bar -o "$TMP/FlashRacs-mac.zip" "$URL"
