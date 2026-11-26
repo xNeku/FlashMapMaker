@@ -1,7 +1,7 @@
 #!/bin/bash
 # Descarga la ultima build de FlashRacs para Mac, la instala en Aplicaciones y la abre.
 set -e
-URL="https://github.com/xNeku/FlashMapMaker/raw/descargas/FlashRacs-mac.zip"
+URL="https://github.com/xNeku/FlashMapMaker/raw/descargas/FlashRacs-mac.zip?t=$(date +%s)"
 TMP="$(mktemp -d)"
 echo "Descargando FlashRacs..."
 curl -fL --progress-bar -o "$TMP/FlashRacs-mac.zip" "$URL"
