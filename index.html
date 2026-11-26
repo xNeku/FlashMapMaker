@@ -73,6 +73,7 @@ footer{grid-column:1/4;display:flex;justify-content:space-between;gap:12px;paddi
   <header>
     <strong class="logo">FlashMapMaker</strong>
     <label>Nombre <input type="text" id="name" maxlength="60" spellcheck="false"></label>
+    <label>Tema <select id="theme"><option value="">Clásico</option><option value="industrial">Industrial</option></select></label>
     <label>Tamaño <input type="number" id="gw" min="8" max="512"> × <input type="number" id="gh" min="8" max="512"> bloques</label>
     <span class="sep"></span>
     <button id="bUndo" title="Deshacer (Ctrl+Z)">↶</button>
@@ -148,7 +149,7 @@ function clampInt(v, min, max, def) {
 }
 
 function newModel(w = 96, h = 54) {
-  return { name: 'mapa_nuevo', w, h, cells: new Map(), ents: [], nextId: 1 };
+  return { name: 'mapa_nuevo', theme: '', w, h, cells: new Map(), ents: [], nextId: 1 };
 }
 
 // Junta las celdas 1x1 en rectángulos grandes (primero en horizontal, luego en vertical).
@@ -182,6 +183,7 @@ function modelToJSON(m) {
   return {
     version: FORMAT_VERSION,
     name: m.name,
+    ...(m.theme ? { theme: m.theme } : {}),
     grid: { w: m.w, h: m.h, block_px: BLOCK_PX },
     tiles: Object.fromEntries(TILE_TYPES.map(t => [t, mergeRects(m, t)])),
     entities: m.ents.map(e => {
@@ -202,6 +204,7 @@ function formatMap(j) {
   return '{\n' +
     '  "version": ' + j.version + ',\n' +
     '  "name": ' + JSON.stringify(j.name) + ',\n' +
+    (j.theme ? '  "theme": ' + JSON.stringify(j.theme) + ',\n' : '') +
     '  "grid": ' + line(j.grid) + ',\n' +
     '  "tiles": {\n' +
     TILE_TYPES.map(t => '    "' + t + '": ' + arr(j.tiles[t] || [], '    ')).join(',\n') + '\n' +
@@ -219,6 +222,7 @@ function jsonToModel(d) {
   const w = clampInt(g.w, 8, 512, 96), h = clampInt(g.h, 8, 512, 54);
   const m = newModel(w, h);
   m.name = String(d.name || 'mapa').slice(0, 60);
+  m.theme = ['industrial'].includes(d.theme) ? d.theme : '';
 
   let outside = 0;
   for (const type of TILE_TYPES) {
@@ -829,7 +833,7 @@ function setAllLights(on) {
   if (n) commit(); else toast('No hay luces que cambiar');
 }
 
-function syncHeader() { $('#name').value = M.name; $('#gw').value = M.w; $('#gh').value = M.h; }
+function syncHeader() { $('#theme').value = M.theme || ''; $('#name').value = M.name; $('#gw').value = M.w; $('#gh').value = M.h; }
 
 function updateStatus() {
   const cnt = t => M.ents.filter(e => e.type === t).length;
@@ -901,6 +905,7 @@ function toast(msg, ms = 3200) {
 // ---- cabecera
 $('#name').addEventListener('input', e => { M.name = e.target.value.slice(0, 60); autosave(); });
 $('#name').addEventListener('change', () => commit());
+$('#theme').addEventListener('change', e => { M.theme = e.target.value; autosave(); commit(); });
 function resizeMap() {
   const w = clampInt(Number($('#gw').value), 8, 512, M.w), h = clampInt(Number($('#gh').value), 8, 512, M.h);
   if (w === M.w && h === M.h) { syncHeader(); return; }
