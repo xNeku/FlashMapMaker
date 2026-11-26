@@ -360,6 +360,19 @@ function anchorFor(type, cx, cy) {
 // ---- dibujo
 const off = document.createElement('canvas');
 
+// ---- tema industrial: los mismos sprites que usa el juego (assets/industrial/)
+const TEMA_FILES = ['muro_relleno','muro_cima','losa_relleno','losa_cima','plataforma','escalera','caja_grande','caja_pequena','taquilla','cajon','barril1','barril2','barril3'];
+const TEMA = {};
+for (const n of TEMA_FILES) { const im = new Image(); im.onload = () => requestDraw(); im.src = 'assets/industrial/' + n + '.png'; TEMA[n] = im; }
+const temaOn = () => M.theme === 'industrial' && TEMA_FILES.every(n => TEMA[n].complete && TEMA[n].naturalWidth > 0);
+const tHash = (a, b) => { const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return v - Math.floor(v); };
+// Un trozo de 11x11 px del sprite (el juego pinta piezas de 22 px = 2x2 casillas)
+function temaCell(img, n, cx, cy, px, py, s, sub) {
+  const v = Math.floor(tHash(Math.floor(cx / 2), sub ? 0 : Math.floor(cy / 2)) * n);
+  const sx = v * 22 + (cx % 2) * 11, sy = sub === 'top' ? (cy % 2) * 11 : sub === 'cap2' ? 11 : sub === 'cap1' ? 0 : (cy % 2) * 11;
+  ctx.drawImage(img, sx, sy, 11, 11, px, py, s + .5, s + .5);
+}
+
 function drawEnt(en, a) {
   const s = view.s, x = view.ox + en.x * s, y = view.oy + en.y * s, w = en.w * s, h = en.h * s;
   ctx.globalAlpha = a;
@@ -373,6 +386,22 @@ function drawEnt(en, a) {
     ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 2; ctx.strokeStyle = '#4a8fd6'; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
     if (!en.open) { ctx.beginPath(); ctx.arc(x + w - s * 0.4, y + h / 2, Math.max(1.5, s * 0.14), 0, Math.PI * 2); ctx.fillStyle = '#cfe6ff'; ctx.fill(); }
+  } else if ((en.type === 'box_big' || en.type === 'box_small') && temaOn()) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(TEMA[en.type === 'box_big' ? 'caja_grande' : 'caja_pequena'], x, y, w, h);
+  } else if (en.type === 'hide' && temaOn()) {
+    ctx.imageSmoothingEnabled = false;
+    const k = s / 11, bot = y + h;
+    if (en.kind === 'rejilla') ctx.drawImage(TEMA.cajon, x, bot - 22 * k, 22 * k, 22 * k);
+    else if (en.kind === 'arbusto') {
+      const b = [TEMA.barril1, TEMA.barril2, TEMA.barril3], bw = b[0].naturalWidth, bh = b[0].naturalHeight;
+      ctx.drawImage(b[1], x + 5 * k, bot - 22 * k, b[1].naturalWidth * k, b[1].naturalHeight * k);
+      ctx.drawImage(b[2], x + 16 * k, bot - 22 * k, b[2].naturalWidth * k, b[2].naturalHeight * k);
+      ctx.drawImage(b[0], x, bot - bh * k, bw * k, bh * k);
+      ctx.drawImage(b[1], x + (w - bw * k) / 2, bot - bh * k, b[1].naturalWidth * k, b[1].naturalHeight * k);
+      ctx.drawImage(b[2], x + w - bw * k, bot - bh * k, b[2].naturalWidth * k, b[2].naturalHeight * k);
+    } else { ctx.drawImage(TEMA.taquilla, x, bot - 22 * k, 22 * k, 22 * k); ctx.drawImage(TEMA.taquilla, x, bot - 44 * k, 22 * k, 22 * k); }
+    ctx.strokeStyle = 'rgba(138,95,196,.9)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.strokeRect(x + .5, y + .5, w - 1, h - 1); ctx.setLineDash([]);
   } else if (en.type === 'box_big' || en.type === 'box_small') {
     ctx.fillStyle = DEFS[en.type].color; ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#4a361a'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
@@ -394,8 +423,23 @@ function drawEnt(en, a) {
   ctx.globalAlpha = 1;
 }
 
-function drawCell(t, px, py) {
+function drawCell(t, px, py, cx, cy) {
   const s = view.s;
+  if (temaOn() && (t === 'solid' || t === 'platform' || t === 'ladder')) {
+    ctx.imageSmoothingEnabled = false;
+    if (t === 'solid') {
+      const up = M.cells.get(CELL_KEY(cx, cy - 1)) === 'solid', up2 = up && M.cells.get(CELL_KEY(cx, cy - 2)) !== 'solid';
+      if (!up) temaCell(TEMA.muro_cima, 4, cx, cy, px, py, s, 'cap1');
+      else if (up2) temaCell(TEMA.muro_cima, 4, cx, cy, px, py, s, 'cap2');
+      else temaCell(TEMA.muro_relleno, 8, cx, cy, px, py, s);
+    } else if (t === 'platform') {
+      const v = Math.floor(tHash(Math.floor(cx / 2), 7) * 3);
+      ctx.drawImage(TEMA.plataforma, v * 22 + (cx % 2) * 11, 0, 11, 11, px, py, s + .5, s + .5);
+    } else {
+      ctx.drawImage(TEMA.escalera, 0, (cy % 2) * 11, 11, 11, px, py, s + .5, s + .5);
+    }
+    return;
+  }
   if (t === 'solid') {
     ctx.fillStyle = '#667085'; ctx.fillRect(px, py, s, s);
     if (s >= 8) { ctx.strokeStyle = 'rgba(0,0,0,.28)'; ctx.lineWidth = 1; ctx.strokeRect(px + .5, py + .5, s - 1, s - 1); }
@@ -445,7 +489,7 @@ function draw() {
   for (const [k, t] of M.cells) {
     const cx = k % 1024, cy = Math.floor(k / 1024), px = ox + cx * s, py = oy + cy * s;
     if (px + s < 0 || py + s < 0 || px > W || py > H) continue;
-    drawCell(t, px, py);
+    drawCell(t, px, py, cx, cy);
   }
 
   // piezas (las bombillas van encima de la oscuridad)
@@ -477,7 +521,7 @@ function draw() {
   if (drag && drag.mode === 'move') {
     for (const c of drag.cells) {
       const px = ox + (c.x + drag.dx) * s, py = oy + (c.y + drag.dy) * s;
-      drawCell(c.type, px, py);
+      drawCell(c.type, px, py, c.x + drag.dx, c.y + drag.dy);
       ctx.fillStyle = 'rgba(90,162,255,.3)'; ctx.fillRect(px, py, s, s);
     }
   } else {
@@ -500,7 +544,7 @@ function draw() {
   if (pasting && clip && hover) {
     const a = pasteAnchor(hover.cx, hover.cy);
     ctx.globalAlpha = .55;
-    for (const c of clip.cells) drawCell(c.type, ox + (a.x + c.x) * s, oy + (a.y + c.y) * s);
+    for (const c of clip.cells) drawCell(c.type, ox + (a.x + c.x) * s, oy + (a.y + c.y) * s, a.x + c.x, a.y + c.y);
     ctx.globalAlpha = 1;
     for (const e of clip.ents) drawEnt({ ...e, x: a.x + e.x, y: a.y + e.y }, .55);
     ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff';

@@ -97,3 +97,6 @@ Las piezas se colocan con el cursor en su fila de abajo, para que apoyen en el s
 - Validación (pasillos, alturas, spawns): hay un hueco en `validate()`, apagado con `VALIDATE_ENABLED`.
 - Guardar sin cuenta de GitHub (para quien no tenga): haría falta un intermediario pequeño con contraseña compartida. De momento esa persona usa **Exportar JSON** y lo manda.
 - El `MapLoader` vive en el repo del juego, no aquí.
+
+## Tema industrial
+Con el selector **Tema → Industrial** el editor pinta suelo, plataformas, escalera de mano, cajas y escondites con los mismos sprites que el juego (`assets/industrial/`). Es solo la vista previa: la clave `theme` del JSON es lo que hace que el juego use el tema. Sin ella, el mapa se ve como siempre.
