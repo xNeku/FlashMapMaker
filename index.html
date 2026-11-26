@@ -126,6 +126,9 @@ footer{grid-column:1/4;display:flex;justify-content:space-between;gap:12px;paddi
 const FORMAT_VERSION = 1;
 const BLOCK_PX = 11;
 const CELL_KEY = (x, y) => y * 1024 + x;
+// Tipos de bloque (rejilla). stairs_r sube hacia la derecha (/), stairs_l hacia la izquierda (\)
+const TILE_TYPES = ['solid', 'platform', 'glass', 'ladder', 'stairs_r', 'stairs_l'];
+const HIDE_SIZES = { armario: [2, 4], rejilla: [2, 2], arbusto: [3, 2] };
 
 // Medidas en bloques. x,y = esquina superior izquierda, eje Y hacia abajo (como Godot).
 const DEFS = {
@@ -135,6 +138,7 @@ const DEFS = {
   door:        { label: 'Puerta',         w: 2, h: 5, color: '#4a8fd6' },
   weapon_base: { label: 'Base de arma',   w: 2, h: 1, color: '#d6584a' },
   spawn:       { label: 'Spawn jugador',  w: 1, h: 2, color: '#4ad67a' },
+  hide:        { label: 'Escondite',      w: 2, h: 4, color: '#8a5fc4' },
 };
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -179,12 +183,13 @@ function modelToJSON(m) {
     version: FORMAT_VERSION,
     name: m.name,
     grid: { w: m.w, h: m.h, block_px: BLOCK_PX },
-    tiles: { solid: mergeRects(m, 'solid'), platform: mergeRects(m, 'platform') },
+    tiles: Object.fromEntries(TILE_TYPES.map(t => [t, mergeRects(m, t)])),
     entities: m.ents.map(e => {
       const o = { type: e.type, x: e.x, y: e.y };
       if (e.type === 'door') { o.w = e.w; o.h = e.h; o.open = !!e.open; }
       if (e.type === 'light') o.on = e.on !== false;
       if (e.type === 'weapon_base' && e.item) o.item = e.item;
+      if (e.type === 'hide') o.kind = e.kind || 'armario';
       return o;
     }),
   };
@@ -199,8 +204,7 @@ function formatMap(j) {
     '  "name": ' + JSON.stringify(j.name) + ',\n' +
     '  "grid": ' + line(j.grid) + ',\n' +
     '  "tiles": {\n' +
-    '    "solid": ' + arr(j.tiles.solid, '    ') + ',\n' +
-    '    "platform": ' + arr(j.tiles.platform, '    ') + '\n' +
+    TILE_TYPES.map(t => '    "' + t + '": ' + arr(j.tiles[t] || [], '    ')).join(',\n') + '\n' +
     '  },\n' +
     '  "entities": ' + arr(j.entities, '  ') + '\n' +
     '}\n';
@@ -217,7 +221,7 @@ function jsonToModel(d) {
   m.name = String(d.name || 'mapa').slice(0, 60);
 
   let outside = 0;
-  for (const type of ['solid', 'platform']) {
+  for (const type of TILE_TYPES) {
     const list = (d.tiles && Array.isArray(d.tiles[type])) ? d.tiles[type] : [];
     for (const r of list) {
       if (!r || typeof r !== 'object') continue;
@@ -238,6 +242,7 @@ function jsonToModel(d) {
     if (e.type === 'door') { en.w = clampInt(e.w, 1, 20, def.w); en.h = clampInt(e.h, 1, 30, def.h); en.open = !!e.open; }
     if (e.type === 'light') en.on = e.on !== false;
     if (e.type === 'weapon_base') en.item = typeof e.item === 'string' ? e.item.slice(0, 40) : '';
+    if (e.type === 'hide') { en.kind = HIDE_SIZES[e.kind] ? e.kind : 'armario'; en.w = HIDE_SIZES[en.kind][0]; en.h = HIDE_SIZES[en.kind][1]; }
     const nx = clamp(en.x, 0, Math.max(0, w - en.w)), ny = clamp(en.y, 0, Math.max(0, h - en.h));
     if (nx !== en.x || ny !== en.y) moved++;
     en.x = nx; en.y = ny;
@@ -280,6 +285,11 @@ const TOOLS = [
   { id: 'door',        label: 'Puerta',         key: '7', color: DEFS.door.color },
   { id: 'weapon_base', label: 'Base de arma',   key: '8', color: DEFS.weapon_base.color },
   { id: 'spawn',       label: 'Spawn jugador',  key: '9', color: DEFS.spawn.color },
+  { id: 'hide',        label: 'Escondite',      key: 'h', color: DEFS.hide.color },
+  { id: 'glass',       label: 'Cristal',        key: 'c', color: '#7fd3e6' },
+  { id: 'ladder',      label: 'Escalera de mano', key: 'e', color: '#b08a4a' },
+  { id: 'stairs_r',    label: 'Escalera /',     key: 'r', color: '#8e98a8' },
+  { id: 'stairs_l',    label: 'Escalera \\',    key: 't', color: '#8e98a8' },
   { id: 'erase',       label: 'Borrar',         key: '0', color: '#e0675a' },
 ];
 
@@ -368,6 +378,10 @@ function drawEnt(en, a) {
     ctx.fillStyle = 'rgba(214,88,74,.75)'; ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#d6584a'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
     if (s >= 9) { ctx.fillStyle = '#fff'; ctx.font = Math.max(8, s * 0.5) + 'px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(en.item || 'arma', x + w / 2, y + h / 2, w - 4); }
+  } else if (en.type === 'hide') {
+    ctx.fillStyle = 'rgba(138,95,196,.55)'; ctx.fillRect(x, y, w, h);
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#8a5fc4'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
+    if (s >= 9) { ctx.fillStyle = '#fff'; ctx.font = Math.max(8, s * 0.45) + 'px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(en.kind || 'armario', x + w / 2, y + h / 2, w - 4); }
   } else if (en.type === 'spawn') {
     ctx.fillStyle = 'rgba(74,214,122,.6)'; ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#4ad67a'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
@@ -381,9 +395,24 @@ function drawCell(t, px, py) {
   if (t === 'solid') {
     ctx.fillStyle = '#667085'; ctx.fillRect(px, py, s, s);
     if (s >= 8) { ctx.strokeStyle = 'rgba(0,0,0,.28)'; ctx.lineWidth = 1; ctx.strokeRect(px + .5, py + .5, s - 1, s - 1); }
-  } else {
+  } else if (t === 'platform') {
     ctx.fillStyle = 'rgba(212,155,58,.14)'; ctx.fillRect(px, py, s, s);
     ctx.fillStyle = '#d49b3a'; ctx.fillRect(px, py, s, Math.max(2, s * 0.3));
+  } else if (t === 'glass') {
+    ctx.fillStyle = 'rgba(127,211,230,.30)'; ctx.fillRect(px, py, s, s);
+    ctx.strokeStyle = 'rgba(190,240,250,.85)'; ctx.lineWidth = 1; ctx.strokeRect(px + .5, py + .5, s - 1, s - 1);
+    if (s >= 8) { ctx.beginPath(); ctx.moveTo(px + s * .2, py + s * .7); ctx.lineTo(px + s * .6, py + s * .2); ctx.stroke(); }
+  } else if (t === 'ladder') {
+    ctx.strokeStyle = '#b08a4a'; ctx.lineWidth = Math.max(1.5, s * 0.14);
+    ctx.beginPath(); ctx.moveTo(px + s * .25, py); ctx.lineTo(px + s * .25, py + s); ctx.moveTo(px + s * .75, py); ctx.lineTo(px + s * .75, py + s); ctx.stroke();
+    ctx.lineWidth = Math.max(1, s * 0.1);
+    ctx.beginPath(); ctx.moveTo(px + s * .25, py + s * .3); ctx.lineTo(px + s * .75, py + s * .3); ctx.moveTo(px + s * .25, py + s * .75); ctx.lineTo(px + s * .75, py + s * .75); ctx.stroke();
+  } else { // stairs_r / stairs_l
+    ctx.fillStyle = '#8e98a8'; ctx.beginPath();
+    if (t === 'stairs_r') { ctx.moveTo(px, py + s); ctx.lineTo(px + s, py); ctx.lineTo(px + s, py + s); }
+    else { ctx.moveTo(px, py); ctx.lineTo(px + s, py + s); ctx.lineTo(px, py + s); }
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1; ctx.stroke();
   }
 }
 
@@ -481,8 +510,8 @@ function draw() {
     if (inside) {
       if (DEFS[tool]) {
         const a = anchorFor(tool, hover.cx, hover.cy);
-        drawEnt({ type: tool, x: a.x, y: a.y, w: a.w, h: a.h, on: true, open: false, item: '' }, .45);
-      } else if (tool === 'solid' || tool === 'platform' || tool === 'erase') {
+        drawEnt({ type: tool, x: a.x, y: a.y, w: a.w, h: a.h, on: true, open: false, item: '', kind: 'armario' }, .45);
+      } else if (TILE_TYPES.includes(tool) || tool === 'erase') {
         ctx.lineWidth = 2; ctx.strokeStyle = tool === 'erase' ? '#e0675a' : '#fff';
         ctx.strokeRect(ox + hover.cx * s + 1, oy + hover.cy * s + 1, s - 2, s - 2);
       }
@@ -547,6 +576,7 @@ function place(type, cx, cy) {
   if (type === 'light') en.on = true;
   if (type === 'door') en.open = false;
   if (type === 'weapon_base') en.item = '';
+  if (type === 'hide') en.kind = 'armario';
   M.ents.push(en);
   selIds = new Set([en.id]); selCells = new Set();
   commit();
@@ -627,7 +657,7 @@ function loadClip() {
     const ok = Number.isInteger;
     clip = {
       w: c.w, h: c.h,
-      cells: (c.cells || []).filter(x => x && ok(x.x) && ok(x.y) && (x.type === 'solid' || x.type === 'platform')),
+      cells: (c.cells || []).filter(x => x && ok(x.x) && ok(x.y) && TILE_TYPES.includes(x.type)),
       ents: (c.ents || []).filter(x => x && DEFS[x.type] && ok(x.x) && ok(x.y) && ok(x.w) && ok(x.h)),
     };
     if (!clip.cells.length && !clip.ents.length) clip = null;
@@ -686,7 +716,7 @@ cv.addEventListener('pointerdown', e => {
   if (pasting && clip) { placeClipboard(c.cx, c.cy); requestDraw(); return; }
   if (tool === 'select') {
     selectDown(c, e.shiftKey);
-  } else if (tool === 'solid' || tool === 'platform') {
+  } else if (TILE_TYPES.includes(tool)) {
     const erase = e.shiftKey;
     if (e.ctrlKey || e.metaKey) drag = { mode: 'rect', type: tool, erase, x0: c.cx, y0: c.cy, x1: c.cx, y1: c.cy, changed: false };
     else { drag = { mode: 'paint', type: tool, erase, last: c, changed: false }; paintCell(c.cx, c.cy, erase, tool); }
@@ -805,7 +835,7 @@ function updateStatus() {
   const cnt = t => M.ents.filter(e => e.type === t).length;
   const pos = hover && hover.cx >= 0 && hover.cy >= 0 && hover.cx < M.w && hover.cy < M.h ? `x ${hover.cx}, y ${hover.cy}` : '—';
   $('#stL').textContent = `${pos}  ·  ${M.w}×${M.h} bloques (${M.w * BLOCK_PX}×${M.h * BLOCK_PX} px)  ·  zoom ${view.s.toFixed(1)}`;
-  $('#stR').textContent = `spawns ${cnt('spawn')} · armas ${cnt('weapon_base')} · luces ${cnt('light')} · puertas ${cnt('door')} · cajas ${cnt('box_big') + cnt('box_small')}`;
+  $('#stR').textContent = `spawns ${cnt('spawn')} · armas ${cnt('weapon_base')} · luces ${cnt('light')} · puertas ${cnt('door')} · escondites ${cnt('hide')} · cajas ${cnt('box_big') + cnt('box_small')}`;
 }
 
 function renderInspector() {
@@ -830,6 +860,7 @@ function renderInspector() {
   if (en.type === 'door') h += `<div class="row"><label>ancho</label><input type="number" data-f="w" min="1" max="20" value="${en.w}"><label>alto</label><input type="number" data-f="h" min="1" max="30" value="${en.h}"></div>
     <div class="row"><label for="fOpen">Abierta</label><input type="checkbox" id="fOpen" data-f="open" ${en.open ? 'checked' : ''}></div><div class="muted">Los mapas actuales usan 2×5.</div>`;
   if (en.type === 'weapon_base') h += `<div class="row"><label>Objeto</label><input type="text" data-f="item" maxlength="40" placeholder="(vacío = al azar)" value="${esc(en.item || '')}"></div>`;
+  if (en.type === 'hide') h += `<div class="row"><label>Tipo</label><select data-f="kind">${Object.keys(HIDE_SIZES).map(k => `<option value="${k}"${en.kind === k ? ' selected' : ''}>${k}</option>`).join('')}</select></div>`;
   h += '<div class="row btns"><button id="bDup">Duplicar</button><button id="bCopy">Copiar</button><button id="bDel" class="danger">Borrar</button></div>';
   if (pasteBtn) h += '<div class="row btns">' + pasteBtn + '</div>';
   box.innerHTML = h;
@@ -845,6 +876,7 @@ $('#inspector').addEventListener('change', e => {
   if (!en || !f) return;
   if (f === 'on' || f === 'open') en[f] = e.target.checked;
   else if (f === 'item') en.item = String(e.target.value).slice(0, 40);
+  else if (f === 'kind') { if (HIDE_SIZES[e.target.value]) { en.kind = e.target.value; en.w = HIDE_SIZES[en.kind][0]; en.h = HIDE_SIZES[en.kind][1]; en.x = clamp(en.x, 0, M.w - en.w); en.y = clamp(en.y, 0, M.h - en.h); } }
   else {
     const v = Math.round(Number(e.target.value));
     if (!Number.isFinite(v)) { refreshUI(); return; }
