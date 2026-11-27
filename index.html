@@ -73,7 +73,7 @@ footer{grid-column:1/4;display:flex;justify-content:space-between;gap:12px;paddi
   <header>
     <strong class="logo">FlashMapMaker</strong>
     <label>Nombre <input type="text" id="name" maxlength="60" spellcheck="false"></label>
-    <label>Tema <select id="theme"><option value="">Clásico</option><option value="industrial">Industrial</option></select></label>
+    <label>Tema <select id="theme"><option value="">Clásico</option><option value="industrial">Industrial</option><option value="ciudad">Ciudad</option></select></label>
     <label>Tamaño <input type="number" id="gw" min="8" max="512"> × <input type="number" id="gh" min="8" max="512"> bloques</label>
     <span class="sep"></span>
     <button id="bUndo" title="Deshacer (Ctrl+Z)">↶</button>
@@ -222,7 +222,7 @@ function jsonToModel(d) {
   const w = clampInt(g.w, 8, 512, 96), h = clampInt(g.h, 8, 512, 54);
   const m = newModel(w, h);
   m.name = String(d.name || 'mapa').slice(0, 60);
-  m.theme = ['industrial'].includes(d.theme) ? d.theme : '';
+  m.theme = ['industrial', 'ciudad'].includes(d.theme) ? d.theme : '';
 
   let outside = 0;
   for (const type of TILE_TYPES) {
@@ -360,11 +360,42 @@ function anchorFor(type, cx, cy) {
 // ---- dibujo
 const off = document.createElement('canvas');
 
-// ---- tema industrial: los mismos sprites que usa el juego (assets/industrial/)
+// ---- temas: los mismos sprites que usa el juego (assets/<tema>/), fondos incluidos
 const TEMA_FILES = ['muro_relleno','muro_cima','losa_relleno','losa_cima','plataforma','escalera','caja_grande','caja_pequena','taquilla','cajon','barril1','barril2','barril3'];
-const TEMA = {};
-for (const n of TEMA_FILES) { const im = new Image(); im.onload = () => requestDraw(); im.src = 'assets/industrial/' + n + '.png'; TEMA[n] = im; }
-const temaOn = () => M.theme === 'industrial' && TEMA_FILES.every(n => TEMA[n].complete && TEMA[n].naturalWidth > 0);
+// fondo: [archivo, escala en px del juego, alineación] (de lejos a cerca); el cielo cubre todo el mapa
+const TEMAS = {
+  industrial: { fondo: [['noche1', 2, 'cover'], ['noche2', 2, 'bottom'], ['noche3', 2, 'bottom'], ['noche4', 2, 'bottom'], ['noche5', 2, 'bottom']] },
+  ciudad: { fondo: [['cielo', 3, 'cover'], ['lejos', 2, 'bottom'], ['cerca', 2, 'bottom']] },
+};
+const loadImg = src => { const im = new Image(); im.onload = () => requestDraw(); im.src = src; return im; };
+for (const [id, t] of Object.entries(TEMAS)) {
+  t.img = {}; for (const n of TEMA_FILES) t.img[n] = loadImg('assets/' + id + '/' + n + '.png');
+  t.bg = t.fondo.map(f => loadImg('assets/' + id + '/fondo/' + f[0] + '.png'));
+}
+let TEMA = TEMAS.industrial.img;
+const ok = im => im.complete && im.naturalWidth > 0;
+const temaOn = () => {
+  const t = TEMAS[M.theme]; if (!t) return false;
+  TEMA = t.img;
+  return TEMA_FILES.every(n => ok(t.img[n]));
+};
+function drawFondoTema(ox, oy, s) {
+  const t = TEMAS[M.theme]; if (!t) return;
+  const w = M.w * s, h = M.h * s, k = s / 11; // 11 px del juego por bloque
+  ctx.save(); ctx.beginPath(); ctx.rect(ox, oy, w, h); ctx.clip(); ctx.imageSmoothingEnabled = false;
+  t.fondo.forEach((f, i) => {
+    const im = t.bg[i]; if (!ok(im)) return;
+    const iw = im.naturalWidth * f[1] * k, ih = im.naturalHeight * f[1] * k;
+    if (f[2] === 'cover') {
+      const sc = Math.max(w / im.naturalWidth, h / im.naturalHeight);
+      ctx.drawImage(im, ox, oy + h - im.naturalHeight * sc, im.naturalWidth * sc, im.naturalHeight * sc);
+    } else {
+      const y = oy + h - ih;
+      for (let x = ox; x < ox + w; x += iw) ctx.drawImage(im, x, y, iw, ih);
+    }
+  });
+  ctx.restore();
+}
 const tHash = (a, b) => { const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return v - Math.floor(v); };
 // Un trozo de 11x11 px del sprite (el juego pinta piezas de 22 px = 2x2 casillas)
 function temaCell(img, n, cx, cy, px, py, s, sub) {
@@ -469,6 +500,7 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#1b2029'; ctx.fillRect(ox, oy, M.w * s, M.h * s);
+  if (temaOn()) drawFondoTema(ox, oy, s);
 
   // rejilla
   if (opts.grid && s >= 6) {
