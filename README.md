@@ -36,6 +36,7 @@ Los mapas viven en el **repo del juego**, no en este: `xNeku/godot-multiplayer-h
 | Shift + arrastrar | borrar bloques |
 | Ctrl + arrastrar | rellenar rectángulo |
 | 1–9, 0 | herramientas |
+| H / C / E / R / T | escondite / cristal / escalera de mano / escalera `/` / escalera `\\` |
 | Seleccionar (1): click o arrastrar | marca piezas **y bloques**; Shift añade |
 | Arrastrar lo marcado | lo mueve (bloques y piezas juntos) |
 | Ctrl+C / Ctrl+X / Ctrl+V | copiar / cortar / pegar. Al pegar sale un sello: click para colocar (se puede repetir), Esc para salir |
@@ -55,12 +56,17 @@ Las piezas se colocan con el cursor en su fila de abajo, para que apoyen en el s
 |---|---|---|
 | Suelo / pared | `tiles.solid` | 1×1, se pintan en tramos |
 | Plataforma | `tiles.platform` | 1×1 |
+| Cristal | `tiles.glass` | 1×1. Bloquea el paso, deja pasar luz y vista; se rompe a tiros (un panel de hasta 14 bloques) |
+| Escalera de mano | `tiles.ladder` | 1×1, columnas. Sin colisión: W/arriba para agarrar, izquierda/derecha para soltar. Que llegue hasta el borde del suelo de arriba |
+| Escalera normal / | `tiles.stairs_r` | 1×1, rampa de 45º que sube hacia la derecha. Pon bloques sólidos debajo |
+| Escalera normal \\ | `tiles.stairs_l` | 1×1, rampa que sube hacia la izquierda |
 | Caja grande | `box_big` | 2×2 |
 | Caja pequeña | `box_small` | 2×1 |
 | Bombilla | `light` | 1×1 (`on`) |
 | Puerta | `door` | 2×5 por defecto (`w`, `h`, `open`) |
 | Base de arma / objeto | `weapon_base` | 2×1 (`item` opcional) |
 | Spawn de jugador | `spawn` | 1×2 |
+| Escondite | `hide` | `kind`: `armario` 2×4, `rejilla` 2×2 o `arbusto` 3×2 |
 
 ## Formato JSON (versión 1)
 
@@ -91,3 +97,9 @@ Las piezas se colocan con el cursor en su fila de abajo, para que apoyen en el s
 - Validación (pasillos, alturas, spawns): hay un hueco en `validate()`, apagado con `VALIDATE_ENABLED`.
 - Guardar sin cuenta de GitHub (para quien no tenga): haría falta un intermediario pequeño con contraseña compartida. De momento esa persona usa **Exportar JSON** y lo manda.
 - El `MapLoader` vive en el repo del juego, no aquí.
+
+## Decoración
+Con un tema elegido, la herramienta **Decoración (D)** te deja poner a mano carteles, vallas, barriles, farolas, etc. Eliges la pieza en la lista de la izquierda y haces click en el mapa (el click marca los pies del objeto). Es solo visual, sin colisión. Si el mapa tiene alguna, el juego no reparte decoración sola; si no tiene ninguna, la reparte como antes. Sin tema no se ve nada.
+
+## Tema industrial
+Con el selector **Tema** (Industrial o Ciudad) el editor pinta suelo, plataformas, escalera de mano, cajas y escondites con los mismos sprites que el juego (`assets/industrial/`). Es solo la vista previa: la clave `theme` del JSON es lo que hace que el juego use el tema. Sin ella, el mapa se ve como siempre.

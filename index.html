@@ -39,6 +39,10 @@ button.danger:hover{border-color:var(--danger);color:var(--danger)}
 #tools{background:var(--panel);border-right:1px solid var(--line);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px}
 #tools h4,#side h4{margin:10px 0 4px;font-size:11px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--dim)}
 #tools h4:first-child{margin-top:2px}
+#propBox .props{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+#propBox .prop{padding:2px;height:38px;display:flex;align-items:center;justify-content:center;background:#222a36;border:1px solid var(--line);border-radius:4px}
+#propBox .prop.active{border-color:#c46fa0;background:#3a2a38}
+#propBox .prop img{max-width:100%;max-height:100%;image-rendering:pixelated}
 .tool{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:6px 8px}
 .tool .sw{width:12px;height:12px;border-radius:3px;flex:none}
 .tool .k{margin-left:auto;color:var(--dim);font-size:11px}
@@ -73,6 +77,7 @@ footer{grid-column:1/4;display:flex;justify-content:space-between;gap:12px;paddi
   <header>
     <strong class="logo">FlashMapMaker</strong>
     <label>Nombre <input type="text" id="name" maxlength="60" spellcheck="false"></label>
+    <label>Tema <select id="theme"><option value="">Clásico</option><option value="industrial">Industrial</option><option value="ciudad">Ciudad</option></select></label>
     <label>Tamaño <input type="number" id="gw" min="8" max="512"> × <input type="number" id="gh" min="8" max="512"> bloques</label>
     <span class="sep"></span>
     <button id="bUndo" title="Deshacer (Ctrl+Z)">↶</button>
@@ -126,6 +131,9 @@ footer{grid-column:1/4;display:flex;justify-content:space-between;gap:12px;paddi
 const FORMAT_VERSION = 1;
 const BLOCK_PX = 11;
 const CELL_KEY = (x, y) => y * 1024 + x;
+// Tipos de bloque (rejilla). stairs_r sube hacia la derecha (/), stairs_l hacia la izquierda (\)
+const TILE_TYPES = ['solid', 'platform', 'glass', 'ladder', 'stairs_r', 'stairs_l'];
+const HIDE_SIZES = { armario: [2, 4], rejilla: [2, 2], arbusto: [3, 2] };
 
 // Medidas en bloques. x,y = esquina superior izquierda, eje Y hacia abajo (como Godot).
 const DEFS = {
@@ -135,6 +143,8 @@ const DEFS = {
   door:        { label: 'Puerta',         w: 2, h: 5, color: '#4a8fd6' },
   weapon_base: { label: 'Base de arma',   w: 2, h: 1, color: '#d6584a' },
   spawn:       { label: 'Spawn jugador',  w: 1, h: 2, color: '#4ad67a' },
+  hide:        { label: 'Escondite',      w: 2, h: 4, color: '#8a5fc4' },
+  prop:        { label: 'Decoración',     w: 2, h: 2, color: '#c46fa0' },
 };
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -144,7 +154,7 @@ function clampInt(v, min, max, def) {
 }
 
 function newModel(w = 96, h = 54) {
-  return { name: 'mapa_nuevo', w, h, cells: new Map(), ents: [], nextId: 1 };
+  return { name: 'mapa_nuevo', theme: '', w, h, cells: new Map(), ents: [], nextId: 1 };
 }
 
 // Junta las celdas 1x1 en rectángulos grandes (primero en horizontal, luego en vertical).
@@ -178,13 +188,16 @@ function modelToJSON(m) {
   return {
     version: FORMAT_VERSION,
     name: m.name,
+    ...(m.theme ? { theme: m.theme } : {}),
     grid: { w: m.w, h: m.h, block_px: BLOCK_PX },
-    tiles: { solid: mergeRects(m, 'solid'), platform: mergeRects(m, 'platform') },
+    tiles: Object.fromEntries(TILE_TYPES.map(t => [t, mergeRects(m, t)])),
     entities: m.ents.map(e => {
       const o = { type: e.type, x: e.x, y: e.y };
       if (e.type === 'door') { o.w = e.w; o.h = e.h; o.open = !!e.open; }
       if (e.type === 'light') o.on = e.on !== false;
       if (e.type === 'weapon_base' && e.item) o.item = e.item;
+      if (e.type === 'hide') o.kind = e.kind || 'armario';
+      if (e.type === 'prop') o.kind = e.kind || '';
       return o;
     }),
   };
@@ -197,10 +210,10 @@ function formatMap(j) {
   return '{\n' +
     '  "version": ' + j.version + ',\n' +
     '  "name": ' + JSON.stringify(j.name) + ',\n' +
+    (j.theme ? '  "theme": ' + JSON.stringify(j.theme) + ',\n' : '') +
     '  "grid": ' + line(j.grid) + ',\n' +
     '  "tiles": {\n' +
-    '    "solid": ' + arr(j.tiles.solid, '    ') + ',\n' +
-    '    "platform": ' + arr(j.tiles.platform, '    ') + '\n' +
+    TILE_TYPES.map(t => '    "' + t + '": ' + arr(j.tiles[t] || [], '    ')).join(',\n') + '\n' +
     '  },\n' +
     '  "entities": ' + arr(j.entities, '  ') + '\n' +
     '}\n';
@@ -215,9 +228,10 @@ function jsonToModel(d) {
   const w = clampInt(g.w, 8, 512, 96), h = clampInt(g.h, 8, 512, 54);
   const m = newModel(w, h);
   m.name = String(d.name || 'mapa').slice(0, 60);
+  m.theme = ['industrial', 'ciudad'].includes(d.theme) ? d.theme : '';
 
   let outside = 0;
-  for (const type of ['solid', 'platform']) {
+  for (const type of TILE_TYPES) {
     const list = (d.tiles && Array.isArray(d.tiles[type])) ? d.tiles[type] : [];
     for (const r of list) {
       if (!r || typeof r !== 'object') continue;
@@ -238,6 +252,8 @@ function jsonToModel(d) {
     if (e.type === 'door') { en.w = clampInt(e.w, 1, 20, def.w); en.h = clampInt(e.h, 1, 30, def.h); en.open = !!e.open; }
     if (e.type === 'light') en.on = e.on !== false;
     if (e.type === 'weapon_base') en.item = typeof e.item === 'string' ? e.item.slice(0, 40) : '';
+    if (e.type === 'prop') { en.kind = typeof e.kind === 'string' ? e.kind.slice(0, 40) : ''; [en.w, en.h] = propSizeFor(m.theme, en.kind); }
+    if (e.type === 'hide') { en.kind = HIDE_SIZES[e.kind] ? e.kind : 'armario'; en.w = HIDE_SIZES[en.kind][0]; en.h = HIDE_SIZES[en.kind][1]; }
     const nx = clamp(en.x, 0, Math.max(0, w - en.w)), ny = clamp(en.y, 0, Math.max(0, h - en.h));
     if (nx !== en.x || ny !== en.y) moved++;
     en.x = nx; en.y = ny;
@@ -280,6 +296,12 @@ const TOOLS = [
   { id: 'door',        label: 'Puerta',         key: '7', color: DEFS.door.color },
   { id: 'weapon_base', label: 'Base de arma',   key: '8', color: DEFS.weapon_base.color },
   { id: 'spawn',       label: 'Spawn jugador',  key: '9', color: DEFS.spawn.color },
+  { id: 'hide',        label: 'Escondite',      key: 'h', color: DEFS.hide.color },
+  { id: 'prop',        label: 'Decoración',     key: 'd', color: DEFS.prop.color },
+  { id: 'glass',       label: 'Cristal',        key: 'c', color: '#7fd3e6' },
+  { id: 'ladder',      label: 'Escalera de mano', key: 'e', color: '#b08a4a' },
+  { id: 'stairs_r',    label: 'Escalera /',     key: 'r', color: '#8e98a8' },
+  { id: 'stairs_l',    label: 'Escalera \\',    key: 't', color: '#8e98a8' },
   { id: 'erase',       label: 'Borrar',         key: '0', color: '#e0675a' },
 ];
 
@@ -339,12 +361,66 @@ let drawQueued = false;
 function requestDraw() { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; draw(); }); } }
 
 function anchorFor(type, cx, cy) {
-  const d = DEFS[type];
+  const d = type === 'prop' ? { w: propSizeFor(M.theme, curProp)[0], h: propSizeFor(M.theme, curProp)[1] } : DEFS[type];
   return { x: clamp(cx - Math.floor((d.w - 1) / 2), 0, M.w - d.w), y: clamp(cy - d.h + 1, 0, M.h - d.h), w: d.w, h: d.h };
 }
 
 // ---- dibujo
 const off = document.createElement('canvas');
+
+// ---- temas: los mismos sprites que usa el juego (assets/<tema>/), fondos incluidos
+const TEMA_FILES = ['muro_relleno','muro_cima','losa_relleno','losa_cima','plataforma','escalera','caja_grande','caja_pequena','taquilla','cajon','barril1','barril2','barril3'];
+// fondo: [archivo, escala en px del juego, alineación] (de lejos a cerca); el cielo cubre todo el mapa
+const PROPS = {
+  industrial: ['barrel1','barrel2','barrel3','bucket','fire-extinguisher1','fire-extinguisher2','bench','mop','pointer1','pointer2','fence1','board1','board2','board3','flag','ps2','ps9','ps19','ps20'],
+  ciudad: ['bolardo','bolsa','bolsa2','valla','semaforos','farola','marquesina','marco','pantalla1','pantalla2','pantalla_rosa','cartel_ammo','ventana','servidores','anillo'],
+};
+let curProp = null;
+const TEMAS = {
+  industrial: { fondo: [['noche1', 2, 'cover'], ['noche2', 2, 'bottom'], ['noche3', 2, 'bottom'], ['noche4', 2, 'bottom'], ['noche5', 2, 'bottom']] },
+  ciudad: { fondo: [['cielo', 3, 'cover'], ['lejos', 2, 'bottom'], ['cerca', 2, 'bottom']] },
+};
+const loadImg = src => { const im = new Image(); im.onload = () => requestDraw(); im.src = src; return im; };
+for (const [id, t] of Object.entries(TEMAS)) {
+  t.img = {}; for (const n of TEMA_FILES) t.img[n] = loadImg('assets/' + id + '/' + n + '.png');
+  t.props = {}; for (const n of PROPS[id]) t.props[n] = loadImg('assets/' + id + '/props/' + n + '.png');
+  t.bg = t.fondo.map(f => loadImg('assets/' + id + '/fondo/' + f[0] + '.png'));
+}
+let TEMA = TEMAS.industrial.img;
+const ok = im => im.complete && im.naturalWidth > 0;
+const temaOn = () => {
+  const t = TEMAS[M.theme]; if (!t) return false;
+  TEMA = t.img;
+  return TEMA_FILES.every(n => ok(t.img[n]));
+};
+function propSizeFor(theme, kind) {
+  const im = TEMAS[theme] && TEMAS[theme].props[kind];
+  return im && im.complete && im.naturalWidth ? [Math.max(1, Math.ceil(im.naturalWidth / 11)), Math.max(1, Math.ceil(im.naturalHeight / 11))] : [2, 2];
+}
+function drawFondoTema(ox, oy, s) {
+  const t = TEMAS[M.theme]; if (!t) return;
+  const w = M.w * s, h = M.h * s, k = s / 11; // 11 px del juego por bloque
+  ctx.save(); ctx.beginPath(); ctx.rect(ox, oy, w, h); ctx.clip(); ctx.imageSmoothingEnabled = false;
+  t.fondo.forEach((f, i) => {
+    const im = t.bg[i]; if (!ok(im)) return;
+    const iw = im.naturalWidth * f[1] * k, ih = im.naturalHeight * f[1] * k;
+    if (f[2] === 'cover') {
+      const sc = Math.max(w / im.naturalWidth, h / im.naturalHeight);
+      ctx.drawImage(im, ox, oy + h - im.naturalHeight * sc, im.naturalWidth * sc, im.naturalHeight * sc);
+    } else {
+      const y = oy + h - ih;
+      for (let x = ox; x < ox + w; x += iw) ctx.drawImage(im, x, y, iw, ih);
+    }
+  });
+  ctx.restore();
+}
+const tHash = (a, b) => { const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return v - Math.floor(v); };
+// Un trozo de 11x11 px del sprite (el juego pinta piezas de 22 px = 2x2 casillas)
+function temaCell(img, n, cx, cy, px, py, s, sub) {
+  const v = Math.floor(tHash(Math.floor(cx / 2), sub ? 0 : Math.floor(cy / 2)) * n);
+  const sx = v * 22 + (cx % 2) * 11, sy = sub === 'top' ? (cy % 2) * 11 : sub === 'cap2' ? 11 : sub === 'cap1' ? 0 : (cy % 2) * 11;
+  ctx.drawImage(img, sx, sy, 11, 11, px, py, s + .5, s + .5);
+}
 
 function drawEnt(en, a) {
   const s = view.s, x = view.ox + en.x * s, y = view.oy + en.y * s, w = en.w * s, h = en.h * s;
@@ -359,6 +435,33 @@ function drawEnt(en, a) {
     ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 2; ctx.strokeStyle = '#4a8fd6'; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
     if (!en.open) { ctx.beginPath(); ctx.arc(x + w - s * 0.4, y + h / 2, Math.max(1.5, s * 0.14), 0, Math.PI * 2); ctx.fillStyle = '#cfe6ff'; ctx.fill(); }
+  } else if ((en.type === 'box_big' || en.type === 'box_small') && temaOn()) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(TEMA[en.type === 'box_big' ? 'caja_grande' : 'caja_pequena'], x, y, w, h);
+  } else if (en.type === 'hide' && temaOn()) {
+    ctx.imageSmoothingEnabled = false;
+    const k = s / 11, bot = y + h;
+    if (en.kind === 'rejilla') ctx.drawImage(TEMA.cajon, x, bot - 22 * k, 22 * k, 22 * k);
+    else if (en.kind === 'arbusto') {
+      const b = [TEMA.barril1, TEMA.barril2, TEMA.barril3], bw = b[0].naturalWidth, bh = b[0].naturalHeight;
+      ctx.drawImage(b[1], x + 5 * k, bot - 22 * k, b[1].naturalWidth * k, b[1].naturalHeight * k);
+      ctx.drawImage(b[2], x + 16 * k, bot - 22 * k, b[2].naturalWidth * k, b[2].naturalHeight * k);
+      ctx.drawImage(b[0], x, bot - bh * k, bw * k, bh * k);
+      ctx.drawImage(b[1], x + (w - bw * k) / 2, bot - bh * k, b[1].naturalWidth * k, b[1].naturalHeight * k);
+      ctx.drawImage(b[2], x + w - bw * k, bot - bh * k, b[2].naturalWidth * k, b[2].naturalHeight * k);
+    } else { ctx.drawImage(TEMA.taquilla, x, bot - 22 * k, 22 * k, 22 * k); ctx.drawImage(TEMA.taquilla, x, bot - 44 * k, 22 * k, 22 * k); }
+    ctx.strokeStyle = 'rgba(138,95,196,.9)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.strokeRect(x + .5, y + .5, w - 1, h - 1); ctx.setLineDash([]);
+  } else if (en.type === 'prop') {
+    const im = TEMAS[M.theme] && TEMAS[M.theme].props[en.kind];
+    if (im && ok(im)) {
+      ctx.imageSmoothingEnabled = false;
+      const k = s / 11, iw = im.naturalWidth * k, ih = im.naturalHeight * k;
+      ctx.drawImage(im, x + (w - iw) / 2, y + h - ih, iw, ih);
+      ctx.strokeStyle = 'rgba(196,111,160,.55)'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]); ctx.strokeRect(x + .5, y + .5, w - 1, h - 1); ctx.setLineDash([]);
+    } else {
+      ctx.fillStyle = 'rgba(196,111,160,.35)'; ctx.fillRect(x, y, w, h);
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#c46fa0'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
+    }
   } else if (en.type === 'box_big' || en.type === 'box_small') {
     ctx.fillStyle = DEFS[en.type].color; ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#4a361a'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
@@ -368,6 +471,10 @@ function drawEnt(en, a) {
     ctx.fillStyle = 'rgba(214,88,74,.75)'; ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#d6584a'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
     if (s >= 9) { ctx.fillStyle = '#fff'; ctx.font = Math.max(8, s * 0.5) + 'px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(en.item || 'arma', x + w / 2, y + h / 2, w - 4); }
+  } else if (en.type === 'hide') {
+    ctx.fillStyle = 'rgba(138,95,196,.55)'; ctx.fillRect(x, y, w, h);
+    ctx.lineWidth = 1.5; ctx.strokeStyle = '#8a5fc4'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
+    if (s >= 9) { ctx.fillStyle = '#fff'; ctx.font = Math.max(8, s * 0.45) + 'px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(en.kind || 'armario', x + w / 2, y + h / 2, w - 4); }
   } else if (en.type === 'spawn') {
     ctx.fillStyle = 'rgba(74,214,122,.6)'; ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#4ad67a'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
@@ -376,14 +483,44 @@ function drawEnt(en, a) {
   ctx.globalAlpha = 1;
 }
 
-function drawCell(t, px, py) {
+function drawCell(t, px, py, cx, cy) {
   const s = view.s;
+  if (temaOn() && (t === 'solid' || t === 'platform' || t === 'ladder')) {
+    ctx.imageSmoothingEnabled = false;
+    if (t === 'solid') {
+      const up = M.cells.get(CELL_KEY(cx, cy - 1)) === 'solid', up2 = up && M.cells.get(CELL_KEY(cx, cy - 2)) !== 'solid';
+      if (!up) temaCell(TEMA.muro_cima, 4, cx, cy, px, py, s, 'cap1');
+      else if (up2) temaCell(TEMA.muro_cima, 4, cx, cy, px, py, s, 'cap2');
+      else temaCell(TEMA.muro_relleno, 8, cx, cy, px, py, s);
+    } else if (t === 'platform') {
+      const v = Math.floor(tHash(Math.floor(cx / 2), 7) * 3);
+      ctx.drawImage(TEMA.plataforma, v * 22 + (cx % 2) * 11, 0, 11, 11, px, py, s + .5, s + .5);
+    } else {
+      ctx.drawImage(TEMA.escalera, 0, (cy % 2) * 11, 11, 11, px, py, s + .5, s + .5);
+    }
+    return;
+  }
   if (t === 'solid') {
     ctx.fillStyle = '#667085'; ctx.fillRect(px, py, s, s);
     if (s >= 8) { ctx.strokeStyle = 'rgba(0,0,0,.28)'; ctx.lineWidth = 1; ctx.strokeRect(px + .5, py + .5, s - 1, s - 1); }
-  } else {
+  } else if (t === 'platform') {
     ctx.fillStyle = 'rgba(212,155,58,.14)'; ctx.fillRect(px, py, s, s);
     ctx.fillStyle = '#d49b3a'; ctx.fillRect(px, py, s, Math.max(2, s * 0.3));
+  } else if (t === 'glass') {
+    ctx.fillStyle = 'rgba(127,211,230,.30)'; ctx.fillRect(px, py, s, s);
+    ctx.strokeStyle = 'rgba(190,240,250,.85)'; ctx.lineWidth = 1; ctx.strokeRect(px + .5, py + .5, s - 1, s - 1);
+    if (s >= 8) { ctx.beginPath(); ctx.moveTo(px + s * .2, py + s * .7); ctx.lineTo(px + s * .6, py + s * .2); ctx.stroke(); }
+  } else if (t === 'ladder') {
+    ctx.strokeStyle = '#b08a4a'; ctx.lineWidth = Math.max(1.5, s * 0.14);
+    ctx.beginPath(); ctx.moveTo(px + s * .25, py); ctx.lineTo(px + s * .25, py + s); ctx.moveTo(px + s * .75, py); ctx.lineTo(px + s * .75, py + s); ctx.stroke();
+    ctx.lineWidth = Math.max(1, s * 0.1);
+    ctx.beginPath(); ctx.moveTo(px + s * .25, py + s * .3); ctx.lineTo(px + s * .75, py + s * .3); ctx.moveTo(px + s * .25, py + s * .75); ctx.lineTo(px + s * .75, py + s * .75); ctx.stroke();
+  } else { // stairs_r / stairs_l
+    ctx.fillStyle = '#8e98a8'; ctx.beginPath();
+    if (t === 'stairs_r') { ctx.moveTo(px, py + s); ctx.lineTo(px + s, py); ctx.lineTo(px + s, py + s); }
+    else { ctx.moveTo(px, py); ctx.lineTo(px + s, py + s); ctx.lineTo(px, py + s); }
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1; ctx.stroke();
   }
 }
 
@@ -392,6 +529,7 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#1b2029'; ctx.fillRect(ox, oy, M.w * s, M.h * s);
+  if (temaOn()) drawFondoTema(ox, oy, s);
 
   // rejilla
   if (opts.grid && s >= 6) {
@@ -412,7 +550,7 @@ function draw() {
   for (const [k, t] of M.cells) {
     const cx = k % 1024, cy = Math.floor(k / 1024), px = ox + cx * s, py = oy + cy * s;
     if (px + s < 0 || py + s < 0 || px > W || py > H) continue;
-    drawCell(t, px, py);
+    drawCell(t, px, py, cx, cy);
   }
 
   // piezas (las bombillas van encima de la oscuridad)
@@ -444,7 +582,7 @@ function draw() {
   if (drag && drag.mode === 'move') {
     for (const c of drag.cells) {
       const px = ox + (c.x + drag.dx) * s, py = oy + (c.y + drag.dy) * s;
-      drawCell(c.type, px, py);
+      drawCell(c.type, px, py, c.x + drag.dx, c.y + drag.dy);
       ctx.fillStyle = 'rgba(90,162,255,.3)'; ctx.fillRect(px, py, s, s);
     }
   } else {
@@ -467,7 +605,7 @@ function draw() {
   if (pasting && clip && hover) {
     const a = pasteAnchor(hover.cx, hover.cy);
     ctx.globalAlpha = .55;
-    for (const c of clip.cells) drawCell(c.type, ox + (a.x + c.x) * s, oy + (a.y + c.y) * s);
+    for (const c of clip.cells) drawCell(c.type, ox + (a.x + c.x) * s, oy + (a.y + c.y) * s, a.x + c.x, a.y + c.y);
     ctx.globalAlpha = 1;
     for (const e of clip.ents) drawEnt({ ...e, x: a.x + e.x, y: a.y + e.y }, .55);
     ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff';
@@ -481,8 +619,8 @@ function draw() {
     if (inside) {
       if (DEFS[tool]) {
         const a = anchorFor(tool, hover.cx, hover.cy);
-        drawEnt({ type: tool, x: a.x, y: a.y, w: a.w, h: a.h, on: true, open: false, item: '' }, .45);
-      } else if (tool === 'solid' || tool === 'platform' || tool === 'erase') {
+        drawEnt({ type: tool, x: a.x, y: a.y, w: a.w, h: a.h, on: true, open: false, item: '', kind: tool === 'prop' ? curProp : 'armario' }, .45);
+      } else if (TILE_TYPES.includes(tool) || tool === 'erase') {
         ctx.lineWidth = 2; ctx.strokeStyle = tool === 'erase' ? '#e0675a' : '#fff';
         ctx.strokeRect(ox + hover.cx * s + 1, oy + hover.cy * s + 1, s - 2, s - 2);
       }
@@ -547,6 +685,8 @@ function place(type, cx, cy) {
   if (type === 'light') en.on = true;
   if (type === 'door') en.open = false;
   if (type === 'weapon_base') en.item = '';
+  if (type === 'hide') en.kind = 'armario';
+  if (type === 'prop') { if (!TEMAS[M.theme]) { toast('Elige un tema para colocar decoración'); return; } if (!curProp) { toast('Elige una decoración en la lista de la izquierda'); return; } en.kind = curProp; }
   M.ents.push(en);
   selIds = new Set([en.id]); selCells = new Set();
   commit();
@@ -627,7 +767,7 @@ function loadClip() {
     const ok = Number.isInteger;
     clip = {
       w: c.w, h: c.h,
-      cells: (c.cells || []).filter(x => x && ok(x.x) && ok(x.y) && (x.type === 'solid' || x.type === 'platform')),
+      cells: (c.cells || []).filter(x => x && ok(x.x) && ok(x.y) && TILE_TYPES.includes(x.type)),
       ents: (c.ents || []).filter(x => x && DEFS[x.type] && ok(x.x) && ok(x.y) && ok(x.w) && ok(x.h)),
     };
     if (!clip.cells.length && !clip.ents.length) clip = null;
@@ -686,7 +826,7 @@ cv.addEventListener('pointerdown', e => {
   if (pasting && clip) { placeClipboard(c.cx, c.cy); requestDraw(); return; }
   if (tool === 'select') {
     selectDown(c, e.shiftKey);
-  } else if (tool === 'solid' || tool === 'platform') {
+  } else if (TILE_TYPES.includes(tool)) {
     const erase = e.shiftKey;
     if (e.ctrlKey || e.metaKey) drag = { mode: 'rect', type: tool, erase, x0: c.cx, y0: c.cy, x1: c.cx, y1: c.cy, changed: false };
     else { drag = { mode: 'paint', type: tool, erase, last: c, changed: false }; paintCell(c.cx, c.cy, erase, tool); }
@@ -779,6 +919,7 @@ function buildTools() {
   const box = $('#tools');
   let h = '<h4>Herramientas</h4>';
   for (const t of TOOLS) h += `<button class="tool" data-tool="${t.id}"><span class="sw" style="background:${t.color}"></span>${esc(t.label)}<span class="k">${t.key}</span></button>`;
+  h += '<h4>Decoración</h4><div id="propBox"></div>';
   h += '<h4>Luces</h4><button id="bLightsOn">Encender todas</button><button id="bLightsOff">Apagar todas</button>';
   h += `<h4>Controles</h4><div class="help">
     <b>Rueda</b> zoom<br><b>Click derecho</b> o <b>Espacio</b>+arrastrar: mover vista<br>
@@ -790,22 +931,30 @@ function buildTools() {
   box.innerHTML = h;
   box.addEventListener('click', e => {
     const b = e.target.closest('.tool'); if (b) setTool(b.dataset.tool);
+    const pb = e.target.closest('[data-prop]'); if (pb) { curProp = pb.dataset.prop; propBoxTheme = null; renderPropBox(); setTool('prop'); }
   });
   $('#bLightsOn').onclick = () => setAllLights(true);
   $('#bLightsOff').onclick = () => setAllLights(false);
+}
+let propBoxTheme = null;
+function renderPropBox() {
+  const box = $('#propBox'); if (!box) return;
+  const key = (M.theme || '') + '|' + curProp; if (propBoxTheme === key) return; propBoxTheme = key;
+  if (!TEMAS[M.theme]) { box.innerHTML = '<div class="muted">Elige un tema arriba para ver la decoración.</div>'; return; }
+  box.innerHTML = '<div class="props">' + PROPS[M.theme].map(n => `<button class="prop${n === curProp ? ' active' : ''}" data-prop="${n}" title="${n}"><img src="assets/${M.theme}/props/${n}.png" alt="${n}"></button>`).join('') + '</div>';
 }
 function setAllLights(on) {
   let n = 0; for (const e of M.ents) if (e.type === 'light' && (e.on !== false) !== on) { e.on = on; n++; }
   if (n) commit(); else toast('No hay luces que cambiar');
 }
 
-function syncHeader() { $('#name').value = M.name; $('#gw').value = M.w; $('#gh').value = M.h; }
+function syncHeader() { $('#theme').value = M.theme || ''; $('#name').value = M.name; $('#gw').value = M.w; $('#gh').value = M.h; }
 
 function updateStatus() {
   const cnt = t => M.ents.filter(e => e.type === t).length;
   const pos = hover && hover.cx >= 0 && hover.cy >= 0 && hover.cx < M.w && hover.cy < M.h ? `x ${hover.cx}, y ${hover.cy}` : '—';
   $('#stL').textContent = `${pos}  ·  ${M.w}×${M.h} bloques (${M.w * BLOCK_PX}×${M.h * BLOCK_PX} px)  ·  zoom ${view.s.toFixed(1)}`;
-  $('#stR').textContent = `spawns ${cnt('spawn')} · armas ${cnt('weapon_base')} · luces ${cnt('light')} · puertas ${cnt('door')} · cajas ${cnt('box_big') + cnt('box_small')}`;
+  $('#stR').textContent = `spawns ${cnt('spawn')} · armas ${cnt('weapon_base')} · luces ${cnt('light')} · puertas ${cnt('door')} · escondites ${cnt('hide')} · cajas ${cnt('box_big') + cnt('box_small')}`;
 }
 
 function renderInspector() {
@@ -830,6 +979,8 @@ function renderInspector() {
   if (en.type === 'door') h += `<div class="row"><label>ancho</label><input type="number" data-f="w" min="1" max="20" value="${en.w}"><label>alto</label><input type="number" data-f="h" min="1" max="30" value="${en.h}"></div>
     <div class="row"><label for="fOpen">Abierta</label><input type="checkbox" id="fOpen" data-f="open" ${en.open ? 'checked' : ''}></div><div class="muted">Los mapas actuales usan 2×5.</div>`;
   if (en.type === 'weapon_base') h += `<div class="row"><label>Objeto</label><input type="text" data-f="item" maxlength="40" placeholder="(vacío = al azar)" value="${esc(en.item || '')}"></div>`;
+  if (en.type === 'prop') h += `<div class="row"><label>Tipo</label><select data-f="kind">${(PROPS[M.theme] || []).map(k => `<option value="${k}"${en.kind === k ? ' selected' : ''}>${k}</option>`).join('')}</select></div>`;
+  if (en.type === 'hide') h += `<div class="row"><label>Tipo</label><select data-f="kind">${Object.keys(HIDE_SIZES).map(k => `<option value="${k}"${en.kind === k ? ' selected' : ''}>${k}</option>`).join('')}</select></div>`;
   h += '<div class="row btns"><button id="bDup">Duplicar</button><button id="bCopy">Copiar</button><button id="bDel" class="danger">Borrar</button></div>';
   if (pasteBtn) h += '<div class="row btns">' + pasteBtn + '</div>';
   box.innerHTML = h;
@@ -845,6 +996,8 @@ $('#inspector').addEventListener('change', e => {
   if (!en || !f) return;
   if (f === 'on' || f === 'open') en[f] = e.target.checked;
   else if (f === 'item') en.item = String(e.target.value).slice(0, 40);
+  else if (f === 'kind' && en.type === 'prop') { en.kind = String(e.target.value).slice(0, 40); [en.w, en.h] = propSizeFor(M.theme, en.kind); en.x = clamp(en.x, 0, M.w - en.w); en.y = clamp(en.y, 0, M.h - en.h); }
+  else if (f === 'kind') { if (HIDE_SIZES[e.target.value]) { en.kind = e.target.value; en.w = HIDE_SIZES[en.kind][0]; en.h = HIDE_SIZES[en.kind][1]; en.x = clamp(en.x, 0, M.w - en.w); en.y = clamp(en.y, 0, M.h - en.h); } }
   else {
     const v = Math.round(Number(e.target.value));
     if (!Number.isFinite(v)) { refreshUI(); return; }
@@ -857,7 +1010,7 @@ $('#inspector').addEventListener('change', e => {
 function refreshUI() {
   $('#bUndo').disabled = hist.i <= 0;
   $('#bRedo').disabled = hist.i >= hist.stack.length - 1;
-  renderInspector(); updateStatus(); requestDraw();
+  renderInspector(); updateStatus(); renderPropBox(); requestDraw();
 }
 
 let toastT;
@@ -869,6 +1022,7 @@ function toast(msg, ms = 3200) {
 // ---- cabecera
 $('#name').addEventListener('input', e => { M.name = e.target.value.slice(0, 60); autosave(); });
 $('#name').addEventListener('change', () => commit());
+$('#theme').addEventListener('change', e => { M.theme = e.target.value; autosave(); commit(); });
 function resizeMap() {
   const w = clampInt(Number($('#gw').value), 8, 512, M.w), h = clampInt(Number($('#gh').value), 8, 512, M.h);
   if (w === M.w && h === M.h) { syncHeader(); return; }
