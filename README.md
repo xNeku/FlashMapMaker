@@ -98,5 +98,8 @@ Las piezas se colocan con el cursor en su fila de abajo, para que apoyen en el s
 - Guardar sin cuenta de GitHub (para quien no tenga): haría falta un intermediario pequeño con contraseña compartida. De momento esa persona usa **Exportar JSON** y lo manda.
 - El `MapLoader` vive en el repo del juego, no aquí.
 
+## Decoración
+Con un tema elegido, la herramienta **Decoración (D)** te deja poner a mano carteles, vallas, barriles, farolas, etc. Eliges la pieza en la lista de la izquierda y haces click en el mapa (el click marca los pies del objeto). Es solo visual, sin colisión. Si el mapa tiene alguna, el juego no reparte decoración sola; si no tiene ninguna, la reparte como antes. Sin tema no se ve nada.
+
 ## Tema industrial
-Con el selector **Tema → Industrial** el editor pinta suelo, plataformas, escalera de mano, cajas y escondites con los mismos sprites que el juego (`assets/industrial/`). Es solo la vista previa: la clave `theme` del JSON es lo que hace que el juego use el tema. Sin ella, el mapa se ve como siempre.
+Con el selector **Tema** (Industrial o Ciudad) el editor pinta suelo, plataformas, escalera de mano, cajas y escondites con los mismos sprites que el juego (`assets/industrial/`). Es solo la vista previa: la clave `theme` del JSON es lo que hace que el juego use el tema. Sin ella, el mapa se ve como siempre.

@@ -39,6 +39,10 @@ button.danger:hover{border-color:var(--danger);color:var(--danger)}
 #tools{background:var(--panel);border-right:1px solid var(--line);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px}
 #tools h4,#side h4{margin:10px 0 4px;font-size:11px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--dim)}
 #tools h4:first-child{margin-top:2px}
+#propBox .props{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+#propBox .prop{padding:2px;height:38px;display:flex;align-items:center;justify-content:center;background:#222a36;border:1px solid var(--line);border-radius:4px}
+#propBox .prop.active{border-color:#c46fa0;background:#3a2a38}
+#propBox .prop img{max-width:100%;max-height:100%;image-rendering:pixelated}
 .tool{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:6px 8px}
 .tool .sw{width:12px;height:12px;border-radius:3px;flex:none}
 .tool .k{margin-left:auto;color:var(--dim);font-size:11px}
@@ -140,6 +144,7 @@ const DEFS = {
   weapon_base: { label: 'Base de arma',   w: 2, h: 1, color: '#d6584a' },
   spawn:       { label: 'Spawn jugador',  w: 1, h: 2, color: '#4ad67a' },
   hide:        { label: 'Escondite',      w: 2, h: 4, color: '#8a5fc4' },
+  prop:        { label: 'Decoración',     w: 2, h: 2, color: '#c46fa0' },
 };
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -192,6 +197,7 @@ function modelToJSON(m) {
       if (e.type === 'light') o.on = e.on !== false;
       if (e.type === 'weapon_base' && e.item) o.item = e.item;
       if (e.type === 'hide') o.kind = e.kind || 'armario';
+      if (e.type === 'prop') o.kind = e.kind || '';
       return o;
     }),
   };
@@ -246,6 +252,7 @@ function jsonToModel(d) {
     if (e.type === 'door') { en.w = clampInt(e.w, 1, 20, def.w); en.h = clampInt(e.h, 1, 30, def.h); en.open = !!e.open; }
     if (e.type === 'light') en.on = e.on !== false;
     if (e.type === 'weapon_base') en.item = typeof e.item === 'string' ? e.item.slice(0, 40) : '';
+    if (e.type === 'prop') { en.kind = typeof e.kind === 'string' ? e.kind.slice(0, 40) : ''; [en.w, en.h] = propSizeFor(m.theme, en.kind); }
     if (e.type === 'hide') { en.kind = HIDE_SIZES[e.kind] ? e.kind : 'armario'; en.w = HIDE_SIZES[en.kind][0]; en.h = HIDE_SIZES[en.kind][1]; }
     const nx = clamp(en.x, 0, Math.max(0, w - en.w)), ny = clamp(en.y, 0, Math.max(0, h - en.h));
     if (nx !== en.x || ny !== en.y) moved++;
@@ -290,6 +297,7 @@ const TOOLS = [
   { id: 'weapon_base', label: 'Base de arma',   key: '8', color: DEFS.weapon_base.color },
   { id: 'spawn',       label: 'Spawn jugador',  key: '9', color: DEFS.spawn.color },
   { id: 'hide',        label: 'Escondite',      key: 'h', color: DEFS.hide.color },
+  { id: 'prop',        label: 'Decoración',     key: 'd', color: DEFS.prop.color },
   { id: 'glass',       label: 'Cristal',        key: 'c', color: '#7fd3e6' },
   { id: 'ladder',      label: 'Escalera de mano', key: 'e', color: '#b08a4a' },
   { id: 'stairs_r',    label: 'Escalera /',     key: 'r', color: '#8e98a8' },
@@ -353,7 +361,7 @@ let drawQueued = false;
 function requestDraw() { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; draw(); }); } }
 
 function anchorFor(type, cx, cy) {
-  const d = DEFS[type];
+  const d = type === 'prop' ? { w: propSizeFor(M.theme, curProp)[0], h: propSizeFor(M.theme, curProp)[1] } : DEFS[type];
   return { x: clamp(cx - Math.floor((d.w - 1) / 2), 0, M.w - d.w), y: clamp(cy - d.h + 1, 0, M.h - d.h), w: d.w, h: d.h };
 }
 
@@ -363,6 +371,11 @@ const off = document.createElement('canvas');
 // ---- temas: los mismos sprites que usa el juego (assets/<tema>/), fondos incluidos
 const TEMA_FILES = ['muro_relleno','muro_cima','losa_relleno','losa_cima','plataforma','escalera','caja_grande','caja_pequena','taquilla','cajon','barril1','barril2','barril3'];
 // fondo: [archivo, escala en px del juego, alineación] (de lejos a cerca); el cielo cubre todo el mapa
+const PROPS = {
+  industrial: ['barrel1','barrel2','barrel3','bucket','fire-extinguisher1','fire-extinguisher2','bench','mop','pointer1','pointer2','fence1','board1','board2','board3','flag','ps2','ps9','ps19','ps20'],
+  ciudad: ['bolardo','bolsa','bolsa2','valla','semaforos','farola','marquesina','marco','pantalla1','pantalla2','pantalla_rosa','cartel_ammo','ventana','servidores','anillo'],
+};
+let curProp = null;
 const TEMAS = {
   industrial: { fondo: [['noche1', 2, 'cover'], ['noche2', 2, 'bottom'], ['noche3', 2, 'bottom'], ['noche4', 2, 'bottom'], ['noche5', 2, 'bottom']] },
   ciudad: { fondo: [['cielo', 3, 'cover'], ['lejos', 2, 'bottom'], ['cerca', 2, 'bottom']] },
@@ -370,6 +383,7 @@ const TEMAS = {
 const loadImg = src => { const im = new Image(); im.onload = () => requestDraw(); im.src = src; return im; };
 for (const [id, t] of Object.entries(TEMAS)) {
   t.img = {}; for (const n of TEMA_FILES) t.img[n] = loadImg('assets/' + id + '/' + n + '.png');
+  t.props = {}; for (const n of PROPS[id]) t.props[n] = loadImg('assets/' + id + '/props/' + n + '.png');
   t.bg = t.fondo.map(f => loadImg('assets/' + id + '/fondo/' + f[0] + '.png'));
 }
 let TEMA = TEMAS.industrial.img;
@@ -379,6 +393,10 @@ const temaOn = () => {
   TEMA = t.img;
   return TEMA_FILES.every(n => ok(t.img[n]));
 };
+function propSizeFor(theme, kind) {
+  const im = TEMAS[theme] && TEMAS[theme].props[kind];
+  return im && im.complete && im.naturalWidth ? [Math.max(1, Math.ceil(im.naturalWidth / 11)), Math.max(1, Math.ceil(im.naturalHeight / 11))] : [2, 2];
+}
 function drawFondoTema(ox, oy, s) {
   const t = TEMAS[M.theme]; if (!t) return;
   const w = M.w * s, h = M.h * s, k = s / 11; // 11 px del juego por bloque
@@ -433,6 +451,17 @@ function drawEnt(en, a) {
       ctx.drawImage(b[2], x + w - bw * k, bot - bh * k, b[2].naturalWidth * k, b[2].naturalHeight * k);
     } else { ctx.drawImage(TEMA.taquilla, x, bot - 22 * k, 22 * k, 22 * k); ctx.drawImage(TEMA.taquilla, x, bot - 44 * k, 22 * k, 22 * k); }
     ctx.strokeStyle = 'rgba(138,95,196,.9)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.strokeRect(x + .5, y + .5, w - 1, h - 1); ctx.setLineDash([]);
+  } else if (en.type === 'prop') {
+    const im = TEMAS[M.theme] && TEMAS[M.theme].props[en.kind];
+    if (im && ok(im)) {
+      ctx.imageSmoothingEnabled = false;
+      const k = s / 11, iw = im.naturalWidth * k, ih = im.naturalHeight * k;
+      ctx.drawImage(im, x + (w - iw) / 2, y + h - ih, iw, ih);
+      ctx.strokeStyle = 'rgba(196,111,160,.55)'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]); ctx.strokeRect(x + .5, y + .5, w - 1, h - 1); ctx.setLineDash([]);
+    } else {
+      ctx.fillStyle = 'rgba(196,111,160,.35)'; ctx.fillRect(x, y, w, h);
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#c46fa0'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
+    }
   } else if (en.type === 'box_big' || en.type === 'box_small') {
     ctx.fillStyle = DEFS[en.type].color; ctx.fillRect(x, y, w, h);
     ctx.lineWidth = 1.5; ctx.strokeStyle = '#4a361a'; ctx.strokeRect(x + .75, y + .75, w - 1.5, h - 1.5);
@@ -590,7 +619,7 @@ function draw() {
     if (inside) {
       if (DEFS[tool]) {
         const a = anchorFor(tool, hover.cx, hover.cy);
-        drawEnt({ type: tool, x: a.x, y: a.y, w: a.w, h: a.h, on: true, open: false, item: '', kind: 'armario' }, .45);
+        drawEnt({ type: tool, x: a.x, y: a.y, w: a.w, h: a.h, on: true, open: false, item: '', kind: tool === 'prop' ? curProp : 'armario' }, .45);
       } else if (TILE_TYPES.includes(tool) || tool === 'erase') {
         ctx.lineWidth = 2; ctx.strokeStyle = tool === 'erase' ? '#e0675a' : '#fff';
         ctx.strokeRect(ox + hover.cx * s + 1, oy + hover.cy * s + 1, s - 2, s - 2);
@@ -657,6 +686,7 @@ function place(type, cx, cy) {
   if (type === 'door') en.open = false;
   if (type === 'weapon_base') en.item = '';
   if (type === 'hide') en.kind = 'armario';
+  if (type === 'prop') { if (!TEMAS[M.theme]) { toast('Elige un tema para colocar decoración'); return; } if (!curProp) { toast('Elige una decoración en la lista de la izquierda'); return; } en.kind = curProp; }
   M.ents.push(en);
   selIds = new Set([en.id]); selCells = new Set();
   commit();
@@ -889,6 +919,7 @@ function buildTools() {
   const box = $('#tools');
   let h = '<h4>Herramientas</h4>';
   for (const t of TOOLS) h += `<button class="tool" data-tool="${t.id}"><span class="sw" style="background:${t.color}"></span>${esc(t.label)}<span class="k">${t.key}</span></button>`;
+  h += '<h4>Decoración</h4><div id="propBox"></div>';
   h += '<h4>Luces</h4><button id="bLightsOn">Encender todas</button><button id="bLightsOff">Apagar todas</button>';
   h += `<h4>Controles</h4><div class="help">
     <b>Rueda</b> zoom<br><b>Click derecho</b> o <b>Espacio</b>+arrastrar: mover vista<br>
@@ -900,9 +931,17 @@ function buildTools() {
   box.innerHTML = h;
   box.addEventListener('click', e => {
     const b = e.target.closest('.tool'); if (b) setTool(b.dataset.tool);
+    const pb = e.target.closest('[data-prop]'); if (pb) { curProp = pb.dataset.prop; propBoxTheme = null; renderPropBox(); setTool('prop'); }
   });
   $('#bLightsOn').onclick = () => setAllLights(true);
   $('#bLightsOff').onclick = () => setAllLights(false);
+}
+let propBoxTheme = null;
+function renderPropBox() {
+  const box = $('#propBox'); if (!box) return;
+  const key = (M.theme || '') + '|' + curProp; if (propBoxTheme === key) return; propBoxTheme = key;
+  if (!TEMAS[M.theme]) { box.innerHTML = '<div class="muted">Elige un tema arriba para ver la decoración.</div>'; return; }
+  box.innerHTML = '<div class="props">' + PROPS[M.theme].map(n => `<button class="prop${n === curProp ? ' active' : ''}" data-prop="${n}" title="${n}"><img src="assets/${M.theme}/props/${n}.png" alt="${n}"></button>`).join('') + '</div>';
 }
 function setAllLights(on) {
   let n = 0; for (const e of M.ents) if (e.type === 'light' && (e.on !== false) !== on) { e.on = on; n++; }
@@ -940,6 +979,7 @@ function renderInspector() {
   if (en.type === 'door') h += `<div class="row"><label>ancho</label><input type="number" data-f="w" min="1" max="20" value="${en.w}"><label>alto</label><input type="number" data-f="h" min="1" max="30" value="${en.h}"></div>
     <div class="row"><label for="fOpen">Abierta</label><input type="checkbox" id="fOpen" data-f="open" ${en.open ? 'checked' : ''}></div><div class="muted">Los mapas actuales usan 2×5.</div>`;
   if (en.type === 'weapon_base') h += `<div class="row"><label>Objeto</label><input type="text" data-f="item" maxlength="40" placeholder="(vacío = al azar)" value="${esc(en.item || '')}"></div>`;
+  if (en.type === 'prop') h += `<div class="row"><label>Tipo</label><select data-f="kind">${(PROPS[M.theme] || []).map(k => `<option value="${k}"${en.kind === k ? ' selected' : ''}>${k}</option>`).join('')}</select></div>`;
   if (en.type === 'hide') h += `<div class="row"><label>Tipo</label><select data-f="kind">${Object.keys(HIDE_SIZES).map(k => `<option value="${k}"${en.kind === k ? ' selected' : ''}>${k}</option>`).join('')}</select></div>`;
   h += '<div class="row btns"><button id="bDup">Duplicar</button><button id="bCopy">Copiar</button><button id="bDel" class="danger">Borrar</button></div>';
   if (pasteBtn) h += '<div class="row btns">' + pasteBtn + '</div>';
@@ -956,6 +996,7 @@ $('#inspector').addEventListener('change', e => {
   if (!en || !f) return;
   if (f === 'on' || f === 'open') en[f] = e.target.checked;
   else if (f === 'item') en.item = String(e.target.value).slice(0, 40);
+  else if (f === 'kind' && en.type === 'prop') { en.kind = String(e.target.value).slice(0, 40); [en.w, en.h] = propSizeFor(M.theme, en.kind); en.x = clamp(en.x, 0, M.w - en.w); en.y = clamp(en.y, 0, M.h - en.h); }
   else if (f === 'kind') { if (HIDE_SIZES[e.target.value]) { en.kind = e.target.value; en.w = HIDE_SIZES[en.kind][0]; en.h = HIDE_SIZES[en.kind][1]; en.x = clamp(en.x, 0, M.w - en.w); en.y = clamp(en.y, 0, M.h - en.h); } }
   else {
     const v = Math.round(Number(e.target.value));
@@ -969,7 +1010,7 @@ $('#inspector').addEventListener('change', e => {
 function refreshUI() {
   $('#bUndo').disabled = hist.i <= 0;
   $('#bRedo').disabled = hist.i >= hist.stack.length - 1;
-  renderInspector(); updateStatus(); requestDraw();
+  renderInspector(); updateStatus(); renderPropBox(); requestDraw();
 }
 
 let toastT;
